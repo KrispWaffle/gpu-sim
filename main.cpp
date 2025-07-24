@@ -9,10 +9,13 @@
 #include <cstddef>
 #include <memory>
 #include <cassert>
-constexpr int NUM_THREADS = 2;
+#include <thread>
+#include <tuple>
+constexpr int NUM_THREADS = 32;
 constexpr int NUM_REGISTERS = 4;
-constexpr int GLOBAL_MEM_SIZE = 5;
+constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
 constexpr int WARP_SIZE = 32;
+constexpr int SLEEP_TIME =0; // In seconds 
 enum class Opcode
 {
     ADD,
@@ -30,6 +33,10 @@ enum class states
     FINISHED
 };
 
+
+struct registerReturnVal{
+
+};
 using Operand = std::variant<Opcode, std::string, float>;
 
 struct Instr
@@ -180,11 +187,20 @@ private:
             case Opcode::LD:{
                 dest_idx = getRegisterName(std::get<std::string>(instruction.src[0]));
                 src_idx = getRegisterName(std::get<std::string>(instruction.src[1]));
-                
+                std::this_thread::sleep_for(std::chrono::seconds(SLEEP_TIME));
                 thread->_registers[dest_idx] = globalMemory[src_idx];
                 
                 std::cout << "LOADING FROM GLOBAL " << thread->_registers[src_idx] << " TO REGISTER " << dest_idx + 1 << std::endl;
                 thread->printRegisters();
+            }
+            case Opcode::ST:{
+                src_idx = getRegisterName(std::get<std::string>(instruction.src[1]));
+                int global_addr = thread->id();
+                globalMemory[global_addr] = thread->_registers[src_idx];
+                std::cout << "LOADING FROM REGISTER " << thread->_registers[src_idx] << " TO GLOBAL " << dest_idx + 1 << std::endl;
+                thread->printRegisters();
+
+
             }
             case Opcode::HALT:
                 thread->active = false;
@@ -231,7 +247,11 @@ public:
             sms[0].addWarp(new_warp);
         }
     }
-
+    void print_global_mem(){
+        for(const auto& m: this->global_memory){
+        std::cout << m << ", ";
+        }
+    }
     std::optional<size_t> store(int value)
     {
 
@@ -333,7 +353,7 @@ public:
         std::cout << "ROUND ROBINED!!!\n";
     }
 };
-
+ 
 int main()
 {
     std::vector<Instr> my_program = {
@@ -341,6 +361,7 @@ int main()
         {Opcode::ADD, {std::string("r2"), std::string("r1"), 5.0f}},  // r2 = r1 + 5
         {Opcode::MOV, {std::string("r3"), std::string("r2")}},        // r3 = r2
         {Opcode::LD, {std::string("r4"),std::string("g1") }},
+        {Opcode::ST, {std::string("g2"),std::string("r4") }},
         {Opcode::HALT, {}}};
     GPU gpu(my_program);
      for(auto& thread : gpu.all_threads) {
@@ -351,11 +372,11 @@ int main()
     gpu.run();
     std::cout << "\n--- Final Register States ---" << std::endl;
     std::cout << "\nGLOBAL MEMORY\n";
-    for(const auto& m: gpu.global_memory){
-        std::cout << m << ", ";
-    }
+    
     for (const auto& thread : gpu.all_threads) {
         thread->printRegisters();
     }
+    gpu.print_global_mem();
     std::cout << std::endl;
+    std::cout << gpu.sms[0].warps.size() << std::endl;
 }
