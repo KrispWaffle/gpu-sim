@@ -94,8 +94,9 @@ private:
 public:
     int id_;
     std::vector<std::shared_ptr<Thread>> threads;
+    std::vector<float> memory;
 
-    Warp() : id_(_id++) {}
+    Warp() : id_(_id++), memory(WARP_SIZE, 0.0f){}
     int id() { return _id; }
     void addThread(std::shared_ptr<Thread> thread)
     {
@@ -148,21 +149,30 @@ public:
     }
 
 private:
-    void execute(Warp warp, const Instr instruction)
+    void execute(Warp& warp, const Instr instruction)
     {
+        
         for (auto &thread : warp.threads)
         {
             if (!thread->active)
                 continue;
 
-            int dest_idx,src_idx;
+            std::string  dest;
+            std::string src;
+            int dest_idx = -1;
+            int src_idx = -1;
+            if(instruction.src.size()>=2 && std::holds_alternative<std::string>(instruction.src[0]) && std::holds_alternative<std::string>(instruction.src[1])){
+                dest = std::get<std::string>(instruction.src[0]);
+                src = std::get<std::string>(instruction.src[1]);
+                dest_idx = getRegisterName(std::get<std::string>(instruction.src[0]));
+                src_idx = getRegisterName(std::get<std::string>(instruction.src[1]));
+            }
             switch (instruction.op)
             {
 
             case Opcode::ADD:
             {
-              dest_idx = getRegisterName(std::get<std::string>(instruction.src[0]));
-              src_idx = getRegisterName(std::get<std::string>(instruction.src[1]));
+           
                 float t_value = std::get<float>(instruction.src[2]);
                 thread->_registers[dest_idx] = thread->_registers[src_idx] + t_value;
                 std::cout << "ADDING " << t_value << " WITH REGISTER " << src_idx + 1 << " TO REGISTER " << dest_idx + 1 << std::endl;
@@ -174,9 +184,12 @@ private:
 
             case Opcode::MOV:{
 
-          
-                dest_idx = getRegisterName(std::get<std::string>(instruction.src[0]));
-                src_idx = getRegisterName(std::get<std::string>(instruction.src[1]));
+                
+                if(!dest.find('r') || dest_idx > NUM_REGISTERS){
+                    std::cerr << "ERROR IN MOV"; 
+                    continue;
+                }
+
                 thread->_registers[dest_idx] = thread->_registers[src_idx];
                 std::cout << "STORING " << thread->_registers[src_idx] << " TO REGISTER " << dest_idx + 1 << std::endl;
 
@@ -185,21 +198,50 @@ private:
                 break;
               }
             case Opcode::LD:{
-                dest_idx = getRegisterName(std::get<std::string>(instruction.src[0]));
-                src_idx = getRegisterName(std::get<std::string>(instruction.src[1]));
-                std::this_thread::sleep_for(std::chrono::seconds(SLEEP_TIME));
-                thread->_registers[dest_idx] = globalMemory[src_idx];
                 
-                std::cout << "LOADING FROM GLOBAL " << thread->_registers[src_idx] << " TO REGISTER " << dest_idx + 1 << std::endl;
-                thread->printRegisters();
+                if(dest.find("gm")){
+                    if(src_idx>globalMemory.size()){
+                        std::cerr << "ERROR IN LOAD: SRC INDEX NEEDS TO BE <= GLOBAL MEM SIZE";
+                        continue;
+                    }
+                    std::this_thread::sleep_for(std::chrono::seconds(SLEEP_TIME));
+                    thread->_registers[dest_idx] = globalMemory[src_idx];
+                
+                    std::cout << "LOADING FROM GLOBAL " << thread->_registers[src_idx] << " TO REGISTER " << dest_idx + 1 << std::endl;
+
+                }else if(dest.find("sm")){
+                    if(src_idx>warp.memory.size()){
+                        std::cerr << "ERROR IN LOAD: SRC INDEX NEEDS TO BE <= WARP MEM SIZE";
+                        continue;
+                    }
+                   thread->_registers[dest_idx] =  warp.memory[src_idx];
+                   std::cout << "LOADING FROM SHARED MEMORY " << thread->_registers[src_idx] << " TO REGISTER " << dest_idx + 1 << std::endl;
+
+                }else{
+                    std::cerr << "ERROR IN LOADING: CANNOT LOAD INTO " << dest;
+                }
+                 thread->printRegisters();
+
+                break;
             }
             case Opcode::ST:{
-                src_idx = getRegisterName(std::get<std::string>(instruction.src[1]));
-                int global_addr = thread->id();
-                globalMemory[global_addr] = thread->_registers[src_idx];
-                std::cout << "LOADING FROM REGISTER " << thread->_registers[src_idx] << " TO GLOBAL " << dest_idx + 1 << std::endl;
+                int addr = thread->id();
+                if(!dest_idx == -1){
+                    std::cout << "NOTE: STORE WILL AUTO CREATE A DEST INDEX\n";
+                }
+                if(dest.find("gm")){
+                    
+                    globalMemory[addr] = thread->_registers[src_idx];
+                    std::cout << "LOADING FROM REGISTER " << thread->_registers[src_idx] << " TO GLOBAL " << dest_idx + 1 << std::endl;
+                }else if(dest.find("sm")){
+                    warp.memory[addr] = thread->_registers[src_idx];
+                    std::cout << "LOADING FROM REGISTER " << thread->_registers[src_idx] << " TO SHARED MEM " << dest_idx + 1 << std::endl;
+                }else{
+                    std::cerr << "ERROR IN STORING: CANNOT STORE INTO " << dest;
+                }
+                
                 thread->printRegisters();
-
+                break;
 
             }
             case Opcode::HALT:
@@ -359,16 +401,12 @@ int main()
     std::vector<Instr> my_program = {
         {Opcode::ADD, {std::string("r1"), std::string("r1"), 10.0f}}, // r1 = r1 + 10
         {Opcode::ADD, {std::string("r2"), std::string("r1"), 5.0f}},  // r2 = r1 + 5
-        {Opcode::MOV, {std::string("r3"), std::string("r2")}},        // r3 = r2
-        {Opcode::LD, {std::string("r4"),std::string("g1") }},
-        {Opcode::ST, {std::string("g2"),std::string("r4") }},
         {Opcode::HALT, {}}};
     GPU gpu(my_program);
      for(auto& thread : gpu.all_threads) {
         
         thread->_registers[getRegisterName("r1")] = static_cast<float>(thread->id() * 1);
     }
-    gpu.global_memory[0] = 13;
     gpu.run();
     std::cout << "\n--- Final Register States ---" << std::endl;
     std::cout << "\nGLOBAL MEMORY\n";
