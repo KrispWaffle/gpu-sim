@@ -19,7 +19,10 @@ constexpr int SLEEP_TIME =0; // In seconds
 enum class Opcode
 {
     ADD,
+    SUB,
     MUL,
+    DIV,
+    NEG,
     LD,
     ST,
     MOV,
@@ -36,7 +39,8 @@ enum class ErrorCode {
     None,
     GlobalOutOfBounds,
     SharedOutOfBounds,
-    InvalidMemorySpace
+    InvalidMemorySpace,
+    DivByZero,
 };
 
 
@@ -58,7 +62,7 @@ int getRegisterName(std::string _register)
         std::string num = _register.substr(1);
         try
         {
-            return std::stoi(num)-1;
+            return std::stoi(num);
         }
         catch (const std::exception &e)
         {
@@ -66,6 +70,20 @@ int getRegisterName(std::string _register)
         }
     }
     return -1;
+}
+int getMemoryLocation(std::string mem){
+    std::string num = mem.substr(2);
+    try
+    {
+        return std::stoi(num);
+    }
+    catch(const std::exception& e)
+    {
+        std::cerr << e.what() << '\n';
+        return -1;
+    }
+    return -1;
+    
 }
 class Thread
 {
@@ -83,7 +101,7 @@ public:
     {
         std::cout << "\nTHREAD: " << this->id_ << "";
         for(int x =0; x<_registers.size(); x++){
-            std::cout<< "\nREG: " << x+1 << " VALUE: " << _registers[x];;
+            std::cout<< "\nREG: " << x << " VALUE: " << _registers[x];;
             
         }
         
@@ -124,17 +142,56 @@ constexpr size_t NUM_OPCODES = 6;
 using HandlerFn = ErrorCode(*)(Thread&, Warp&, std::vector<float>&, const Instr&);
 
 std::array<HandlerFn, NUM_OPCODES> opcode_handlers;
-ErrorCode handle_add(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+ErrorCode _add_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
     float val = std::get<float>(instr.src[2]);
     t._registers[dest] = t._registers[src] + val;
-    std::cout << "[T" << t.id() << "] ADD r" << src+1 << " + " << val << " -> r" << dest+1 << "\n";
+    std::cout << "[T" << t.id() << "] ADD r" << src << " + " << val << " -> r" << dest << "\n";
+    t.printRegisters();
+    return ErrorCode::None;
+}
+ErrorCode _sub_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
+    int src = getRegisterName(std::get<std::string>(instr.src[1]));
+    float val = std::get<float>(instr.src[2]);
+    t._registers[dest] = t._registers[src] - val;
+    std::cout << "[T" << t.id() << "] SUB r" << src+1 << " - " << val << " -> r" << dest+1 << "\n";
+    t.printRegisters();
+    return ErrorCode::None;
+}
+ErrorCode _mul_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
+    int src = getRegisterName(std::get<std::string>(instr.src[1]));
+    float val = std::get<float>(instr.src[2]);
+    t._registers[dest] = t._registers[src] * val;
+    std::cout << "[T" << t.id() << "] MUL r" << src+1 << " * " << val << " -> r" << dest+1 << "\n";
+    t.printRegisters();
+    return ErrorCode::None;
+}
+ErrorCode _div_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
+    int src = getRegisterName(std::get<std::string>(instr.src[1]));
+    float val = std::get<float>(instr.src[2]);
+    if(val==0){
+        std::cout << "DIV error: cannot divide by zero\n";
+        return ErrorCode::DivByZero;
+    }
+    t._registers[dest] = t._registers[src] / val;
+    std::cout << "[T" << t.id() << "] DIV r" << src+1 << " / " << val << " -> r" << dest+1 << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
 
-ErrorCode handle_mov(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+ErrorCode _neg_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
+    int src = getRegisterName(std::get<std::string>(instr.src[1]));
+    t._registers[dest] = -1*t._registers[src];
+    std::cout << "[T" << t.id() << "] NEG r" << src+1 << "\n";
+    t.printRegisters();
+    return ErrorCode::None;
+}
+ErrorCode _mov_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
     t._registers[dest] = t._registers[src];
@@ -143,17 +200,24 @@ ErrorCode handle_mov(Thread& t, Warp&, std::vector<float>&, const Instr& instr) 
     return ErrorCode::None;
 }
 
-ErrorCode handle_ld(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+ErrorCode _ld_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
     std::string dest = std::get<std::string>(instr.src[0]);
-    int src_idx = getRegisterName(std::get<std::string>(instr.src[1]));
+    int src_idx = getMemoryLocation(std::get<std::string>(instr.src[1]));
     int dest_idx = getRegisterName(dest);
-
-    if (dest.find("gm") != std::string::npos) {
+    
+    if (dest.find("gm")) {
+        std::cout << "SRC INDEX: " << src_idx << std::endl;
         if (src_idx >= global.size()) {
             std::cerr << "LD error: global out of bounds\n";
             return ErrorCode::GlobalOutOfBounds;
+        }else if(src_idx==-1){
+            int addr = t.id(); 
+            t._registers[dest_idx] = global[addr];
+        }else{
+            t._registers[dest_idx] = global[src_idx];
+
         }
-        t._registers[dest_idx] = global[src_idx];
+        
     } else if (dest.find("sm") != std::string::npos) {
         if (src_idx >= warp.memory.size()) {
             std::cerr << "LD error: shared out of bounds\n";
@@ -170,10 +234,10 @@ ErrorCode handle_ld(Thread& t, Warp& warp, std::vector<float>& global, const Ins
     return ErrorCode::None;
 }
 
-ErrorCode handle_st(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+ErrorCode _st_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
     std::string dest = std::get<std::string>(instr.src[0]);
     int src_idx = getRegisterName(std::get<std::string>(instr.src[1]));
-    int addr = t.id(); // For demo
+    int addr = t.id(); 
 
     if (dest.find("gm") != std::string::npos) {
         global[addr] = t._registers[src_idx];
@@ -188,17 +252,22 @@ ErrorCode handle_st(Thread& t, Warp& warp, std::vector<float>& global, const Ins
     return ErrorCode::None;
 }
 
-ErrorCode handle_halt(Thread& t, Warp&, std::vector<float>&, const Instr&) {
+ErrorCode _halt_(Thread& t, Warp&, std::vector<float>&, const Instr&) {
     t.active = false;
     std::cout << "[T" << t.id() << "] HALT\n";
     return ErrorCode::None;
 }
 void setup_opcode_handlers() {
-    opcode_handlers[static_cast<int>(Opcode::ADD)]  = handle_add;
-    opcode_handlers[static_cast<int>(Opcode::MOV)]  = handle_mov;
-    opcode_handlers[static_cast<int>(Opcode::LD)]   = handle_ld;
-    opcode_handlers[static_cast<int>(Opcode::ST)]   = handle_st;
-    opcode_handlers[static_cast<int>(Opcode::HALT)] = handle_halt;
+    opcode_handlers[static_cast<int>(Opcode::ADD)]  = _add_;
+    opcode_handlers[static_cast<int>(Opcode::SUB)] = _sub_;
+    opcode_handlers[static_cast<int>(Opcode::SUB)] = _mul_;
+    opcode_handlers[static_cast<int>(Opcode::DIV)] = _div_;
+    opcode_handlers[static_cast<int>(Opcode::NEG)] = _neg_;
+    opcode_handlers[static_cast<int>(Opcode::MOV)]  = _mov_;
+    opcode_handlers[static_cast<int>(Opcode::LD)]   = _ld_;
+    opcode_handlers[static_cast<int>(Opcode::ST)]   = _st_;
+    opcode_handlers[static_cast<int>(Opcode::HALT)] = _halt_;
+    
 }
 
 class SM
@@ -287,6 +356,7 @@ public:
         for(const auto& m: this->global_memory){
         std::cout << m << ", ";
         }
+        std::cout << "\n";
     }
     std::optional<size_t> store(int value)
     {
@@ -340,14 +410,12 @@ int main()
 {
     setup_opcode_handlers();
     std::vector<Instr> program = {
-        {Opcode::ADD,  {"r1", "r2", 5.0f}},
-        {Opcode::MOV,  {"r3", "r1"}},
-        {Opcode::ST,   {"gm", "r3"}},
-        {Opcode::MOV,   {"r4", "r1"}},
+        {Opcode::ADD, {"r0", "r0",6.0f}},
+        {Opcode::DIV, {"r0", "r0", 0.0f}},
         {Opcode::HALT, {}},
     };
     GPU gpu(program);
-  
+    gpu.global_memory[0] = 4.0f;
     gpu.run();
     std::cout << "\n--- Final Register States ---" << std::endl;
     
