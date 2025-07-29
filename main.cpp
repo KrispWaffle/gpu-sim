@@ -140,12 +140,17 @@ int Warp::_id = 0;
 constexpr size_t NUM_OPCODES = 6; 
 
 using HandlerFn = ErrorCode(*)(Thread&, Warp&, std::vector<float>&, const Instr&);
-
+using InstrValue = std::variant<float, std::string>;
 std::array<HandlerFn, NUM_OPCODES> opcode_handlers;
 ErrorCode _add_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    float val = std::get<float>(instr.src[2]);
+    auto val =0.0f;
+    if(const float* p_float = std::get_if<float>(&instr.src[2])){
+         val = *p_float;
+    }else{
+        val = t._registers[getRegisterName(std::get<std::string>(instr.src[2]))];
+    }
     t._registers[dest] = t._registers[src] + val;
     std::cout << "[T" << t.id() << "] ADD r" << src << " + " << val << " -> r" << dest << "\n";
     t.printRegisters();
@@ -154,31 +159,46 @@ ErrorCode _add_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
 ErrorCode _sub_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    float val = std::get<float>(instr.src[2]);
+    auto val =0.0f;
+    if(const float* p_float = std::get_if<float>(&instr.src[2])){
+         val = *p_float;
+    }else{
+        val = t._registers[getRegisterName(std::get<std::string>(instr.src[2]))];
+    }
     t._registers[dest] = t._registers[src] - val;
-    std::cout << "[T" << t.id() << "] SUB r" << src+1 << " - " << val << " -> r" << dest+1 << "\n";
+    std::cout << "[T" << t.id() << "] SUB r" << src << " - " << val << " -> r" << dest << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
 ErrorCode _mul_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    float val = std::get<float>(instr.src[2]);
+    auto val =0.0f;
+    if(const float* p_float = std::get_if<float>(&instr.src[2])){
+         val = *p_float;
+    }else{
+        val = t._registers[getRegisterName(std::get<std::string>(instr.src[2]))];
+    }
     t._registers[dest] = t._registers[src] * val;
-    std::cout << "[T" << t.id() << "] MUL r" << src+1 << " * " << val << " -> r" << dest+1 << "\n";
+    std::cout << "[T" << t.id() << "] MUL r" << src << " * " << val << " -> r" << dest << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
 ErrorCode _div_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    float val = std::get<float>(instr.src[2]);
+    auto val =0.0f;
+    if(const float* p_float = std::get_if<float>(&instr.src[2])){
+         val = *p_float;
+    }else{
+        val = t._registers[getRegisterName(std::get<std::string>(instr.src[2]))];
+    }
     if(val==0){
         std::cout << "DIV error: cannot divide by zero\n";
         return ErrorCode::DivByZero;
     }
     t._registers[dest] = t._registers[src] / val;
-    std::cout << "[T" << t.id() << "] DIV r" << src+1 << " / " << val << " -> r" << dest+1 << "\n";
+    std::cout << "[T" << t.id() << "] DIV r" << src << " / " << val << " -> r" << dest << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
@@ -187,7 +207,7 @@ ErrorCode _neg_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
     t._registers[dest] = -1*t._registers[src];
-    std::cout << "[T" << t.id() << "] NEG r" << src+1 << "\n";
+    std::cout << "[T" << t.id() << "] NEG r" << src << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
@@ -195,7 +215,7 @@ ErrorCode _mov_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
     t._registers[dest] = t._registers[src];
-    std::cout << "[T" << t.id() << "] MOV r" << src+1 << " -> r" << dest+1 << "\n";
+    std::cout << "[T" << t.id() << "] MOV r" << src << " -> r" << dest+1 << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
@@ -411,7 +431,7 @@ int main()
     setup_opcode_handlers();
     std::vector<Instr> program = {
         {Opcode::ADD, {"r0", "r0",6.0f}},
-        {Opcode::DIV, {"r0", "r0", 0.0f}},
+        {Opcode::ADD, {"r1", "r1", "r0"}},
         {Opcode::HALT, {}},
     };
     GPU gpu(program);
