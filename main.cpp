@@ -32,6 +32,12 @@ enum class states
     ACTIVE,
     FINISHED
 };
+enum class ErrorCode {
+    None,
+    GlobalOutOfBounds,
+    SharedOutOfBounds,
+    InvalidMemorySpace
+};
 
 
 struct registerReturnVal{
@@ -113,29 +119,31 @@ public:
     }
 };
 int Warp::_id = 0;
-constexpr size_t NUM_OPCODES = 6; // Update this if you add more instructions
+constexpr size_t NUM_OPCODES = 6; 
 
-using HandlerFn = void(*)(Thread&, Warp&, std::vector<float>&, const Instr&);
+using HandlerFn = ErrorCode(*)(Thread&, Warp&, std::vector<float>&, const Instr&);
 
 std::array<HandlerFn, NUM_OPCODES> opcode_handlers;
-void handle_add(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+ErrorCode handle_add(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
     float val = std::get<float>(instr.src[2]);
     t._registers[dest] = t._registers[src] + val;
     std::cout << "[T" << t.id() << "] ADD r" << src+1 << " + " << val << " -> r" << dest+1 << "\n";
     t.printRegisters();
+    return ErrorCode::None;
 }
 
-void handle_mov(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+ErrorCode handle_mov(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
     t._registers[dest] = t._registers[src];
     std::cout << "[T" << t.id() << "] MOV r" << src+1 << " -> r" << dest+1 << "\n";
     t.printRegisters();
+    return ErrorCode::None;
 }
 
-void handle_ld(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+ErrorCode handle_ld(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
     std::string dest = std::get<std::string>(instr.src[0]);
     int src_idx = getRegisterName(std::get<std::string>(instr.src[1]));
     int dest_idx = getRegisterName(dest);
@@ -143,23 +151,26 @@ void handle_ld(Thread& t, Warp& warp, std::vector<float>& global, const Instr& i
     if (dest.find("gm") != std::string::npos) {
         if (src_idx >= global.size()) {
             std::cerr << "LD error: global out of bounds\n";
-            return;
+            return ErrorCode::GlobalOutOfBounds;
         }
         t._registers[dest_idx] = global[src_idx];
     } else if (dest.find("sm") != std::string::npos) {
         if (src_idx >= warp.memory.size()) {
             std::cerr << "LD error: shared out of bounds\n";
-            return;
+            
+            return ErrorCode::SharedOutOfBounds;
         }
         t._registers[dest_idx] = warp.memory[src_idx];
     } else {
         std::cerr << "LD error: invalid memory space\n";
+        return ErrorCode::InvalidMemorySpace;
     }
     std::cout << "[T" << t.id() << "] LD " << dest << " <- [" << src_idx << "]\n";
     t.printRegisters();
+    return ErrorCode::None;
 }
 
-void handle_st(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+ErrorCode handle_st(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
     std::string dest = std::get<std::string>(instr.src[0]);
     int src_idx = getRegisterName(std::get<std::string>(instr.src[1]));
     int addr = t.id(); // For demo
@@ -170,14 +181,17 @@ void handle_st(Thread& t, Warp& warp, std::vector<float>& global, const Instr& i
         warp.memory[addr] = t._registers[src_idx];
     } else {
         std::cerr << "ST error: invalid memory space\n";
+        return ErrorCode::InvalidMemorySpace;
     }
     std::cout << "[T" << t.id() << "] ST r" << src_idx+1 << " -> " << dest << "[" << addr << "]\n";
     t.printRegisters();
+    return ErrorCode::None;
 }
 
-void handle_halt(Thread& t, Warp&, std::vector<float>&, const Instr&) {
+ErrorCode handle_halt(Thread& t, Warp&, std::vector<float>&, const Instr&) {
     t.active = false;
     std::cout << "[T" << t.id() << "] HALT\n";
+    return ErrorCode::None;
 }
 void setup_opcode_handlers() {
     opcode_handlers[static_cast<int>(Opcode::ADD)]  = handle_add;
@@ -236,7 +250,7 @@ private:
             if (thread->active) thread->pc++;
         }
     }
-    void xecute(Warp& warp, const Instr instruction)
+    void _execute(Warp& warp, const Instr instruction)
     {
         
         for (auto &thread : warp.threads)
@@ -306,6 +320,7 @@ private:
 
                 }else{
                     std::cerr << "ERROR IN LOADING: CANNOT LOAD INTO " << dest;
+                    exit(EXIT_FAILURE);
                 }
                  thread->printRegisters();
 
@@ -436,18 +451,20 @@ int main()
         {Opcode::ADD,  {"r1", "r2", 5.0f}},
         {Opcode::MOV,  {"r3", "r1"}},
         {Opcode::ST,   {"gm", "r3"}},
-        {Opcode::LD,   {"r4", "r1"}},
+        {Opcode::MOV,   {"r4", "r1"}},
         {Opcode::HALT, {}},
     };
     GPU gpu(program);
   
     gpu.run();
     std::cout << "\n--- Final Register States ---" << std::endl;
-    std::cout << "\nGLOBAL MEMORY\n";
+    
     
     for (const auto& thread : gpu.all_threads) {
         thread->printRegisters();
     }
+    std::cout<<std::endl;
+    std::cout << "\nGLOBAL MEMORY\n";
     gpu.print_global_mem();
   
 }
