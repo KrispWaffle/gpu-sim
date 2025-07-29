@@ -341,60 +341,6 @@ public:
     }
 };
 
-class Program
-{
-public:
-    Program(int burst_time, int arrival_time)
-        : id_(_id++), burst_time_(burst_time), arrival_time_(arrival_time) {}
-
-    int id() { return id_; }
-    int burstTime() const { return burst_time_; }
-    int arrivalTime() const { return arrival_time_; }
-    void setBurstTime(int burst_time) { burst_time_ = burst_time; }
-
-private:
-    int id_;
-    int burst_time_;
-    int arrival_time_;
-    static int _id;
-};
-
-template <typename T>
-void remove(std::vector<T> &vec, typename std::vector<T>::iterator pos)
-{
-    vec.erase(pos);
-}
-class Robin
-{
-public:
-    std::vector<Program> readyQueue;
-    int quantumTime;
-
-    Robin(std::vector<Program> readyQueue, int quantumTime)
-        : readyQueue(std::move(readyQueue)), quantumTime(quantumTime) {}
-
-    void simulate()
-    {
-        while (!readyQueue.empty())
-        {
-            for (auto it = readyQueue.begin(); it != readyQueue.end();)
-            {
-                if (it->burstTime() <= quantumTime)
-                {
-                    std::cout << "Program: " << it->id() << " executed to completion\n";
-                    it = readyQueue.erase(it);
-                }
-                else
-                {
-                    it->setBurstTime(it->burstTime() - quantumTime);
-                    std::cout << "Program: " << it->id() << " ran, remaining burst = " << it->burstTime() << "\n";
-                    ++it;
-                }
-            }
-        }
-        std::cout << "ROUND ROBINED!!!\n";
-    }
-};
  
 int main()
 {
