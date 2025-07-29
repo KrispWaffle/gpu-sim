@@ -11,7 +11,7 @@
 #include <cassert>
 #include <thread>
 #include <tuple>
-constexpr int NUM_THREADS = 32;
+constexpr int NUM_THREADS = 4;
 constexpr int NUM_REGISTERS = 4;
 constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
 constexpr int WARP_SIZE = 32;
@@ -113,6 +113,80 @@ public:
     }
 };
 int Warp::_id = 0;
+constexpr size_t NUM_OPCODES = 6; // Update this if you add more instructions
+
+using HandlerFn = void(*)(Thread&, Warp&, std::vector<float>&, const Instr&);
+
+std::array<HandlerFn, NUM_OPCODES> opcode_handlers;
+void handle_add(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
+    int src = getRegisterName(std::get<std::string>(instr.src[1]));
+    float val = std::get<float>(instr.src[2]);
+    t._registers[dest] = t._registers[src] + val;
+    std::cout << "[T" << t.id() << "] ADD r" << src+1 << " + " << val << " -> r" << dest+1 << "\n";
+    t.printRegisters();
+}
+
+void handle_mov(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
+    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
+    int src = getRegisterName(std::get<std::string>(instr.src[1]));
+    t._registers[dest] = t._registers[src];
+    std::cout << "[T" << t.id() << "] MOV r" << src+1 << " -> r" << dest+1 << "\n";
+    t.printRegisters();
+}
+
+void handle_ld(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+    std::string dest = std::get<std::string>(instr.src[0]);
+    int src_idx = getRegisterName(std::get<std::string>(instr.src[1]));
+    int dest_idx = getRegisterName(dest);
+
+    if (dest.find("gm") != std::string::npos) {
+        if (src_idx >= global.size()) {
+            std::cerr << "LD error: global out of bounds\n";
+            return;
+        }
+        t._registers[dest_idx] = global[src_idx];
+    } else if (dest.find("sm") != std::string::npos) {
+        if (src_idx >= warp.memory.size()) {
+            std::cerr << "LD error: shared out of bounds\n";
+            return;
+        }
+        t._registers[dest_idx] = warp.memory[src_idx];
+    } else {
+        std::cerr << "LD error: invalid memory space\n";
+    }
+    std::cout << "[T" << t.id() << "] LD " << dest << " <- [" << src_idx << "]\n";
+    t.printRegisters();
+}
+
+void handle_st(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+    std::string dest = std::get<std::string>(instr.src[0]);
+    int src_idx = getRegisterName(std::get<std::string>(instr.src[1]));
+    int addr = t.id(); // For demo
+
+    if (dest.find("gm") != std::string::npos) {
+        global[addr] = t._registers[src_idx];
+    } else if (dest.find("sm") != std::string::npos) {
+        warp.memory[addr] = t._registers[src_idx];
+    } else {
+        std::cerr << "ST error: invalid memory space\n";
+    }
+    std::cout << "[T" << t.id() << "] ST r" << src_idx+1 << " -> " << dest << "[" << addr << "]\n";
+    t.printRegisters();
+}
+
+void handle_halt(Thread& t, Warp&, std::vector<float>&, const Instr&) {
+    t.active = false;
+    std::cout << "[T" << t.id() << "] HALT\n";
+}
+void setup_opcode_handlers() {
+    opcode_handlers[static_cast<int>(Opcode::ADD)]  = handle_add;
+    opcode_handlers[static_cast<int>(Opcode::MOV)]  = handle_mov;
+    opcode_handlers[static_cast<int>(Opcode::LD)]   = handle_ld;
+    opcode_handlers[static_cast<int>(Opcode::ST)]   = handle_st;
+    opcode_handlers[static_cast<int>(Opcode::HALT)] = handle_halt;
+}
+
 class SM
 {
 public:
@@ -144,12 +218,25 @@ public:
 
             const Instr &instruction = program[shared_pc];
 
-            execute(warp, instruction);
+            this->execute(warp, instruction);
         }
     }
 
 private:
-    void execute(Warp& warp, const Instr instruction)
+    void execute(Warp& warp, const Instr& instruction) {
+        HandlerFn fn = opcode_handlers[static_cast<int>(instruction.op)];
+        if (!fn) {
+            std::cerr << "ERROR: Unknown opcode\n";
+            return;
+        }
+
+        for (auto& thread : warp.threads) {
+            if (!thread->active) continue;
+            fn(*thread, warp, globalMemory, instruction);
+            if (thread->active) thread->pc++;
+        }
+    }
+    void xecute(Warp& warp, const Instr instruction)
     {
         
         for (auto &thread : warp.threads)
@@ -267,7 +354,7 @@ public:
     std::vector<SM> sms;
     std::vector<std::shared_ptr<Thread>> all_threads;
     std::vector<Instr> program;
-
+    
     GPU(const std::vector<Instr> &program) : program(program), global_memory(GLOBAL_MEM_SIZE, 0.0f)
     {
         sms.emplace_back(0, global_memory);
@@ -344,15 +431,16 @@ public:
  
 int main()
 {
-    std::vector<Instr> my_program = {
-        {Opcode::ADD, {std::string("r1"), std::string("r1"), 10.0f}}, // r1 = r1 + 10
-        {Opcode::ADD, {std::string("r2"), std::string("r1"), 5.0f}},  // r2 = r1 + 5
-        {Opcode::HALT, {}}};
-    GPU gpu(my_program);
-     for(auto& thread : gpu.all_threads) {
-        
-        thread->_registers[getRegisterName("r1")] = static_cast<float>(thread->id() * 1);
-    }
+    setup_opcode_handlers();
+    std::vector<Instr> program = {
+        {Opcode::ADD,  {"r1", "r2", 5.0f}},
+        {Opcode::MOV,  {"r3", "r1"}},
+        {Opcode::ST,   {"gm", "r3"}},
+        {Opcode::LD,   {"r4", "r1"}},
+        {Opcode::HALT, {}},
+    };
+    GPU gpu(program);
+  
     gpu.run();
     std::cout << "\n--- Final Register States ---" << std::endl;
     std::cout << "\nGLOBAL MEMORY\n";
@@ -361,6 +449,5 @@ int main()
         thread->printRegisters();
     }
     gpu.print_global_mem();
-    std::cout << std::endl;
-    std::cout << gpu.sms[0].warps.size() << std::endl;
+  
 }
