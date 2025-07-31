@@ -16,6 +16,7 @@ constexpr int NUM_REGISTERS = 4;
 constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
 constexpr int WARP_SIZE = 32;
 constexpr int SLEEP_TIME =0; // In seconds 
+constexpr size_t NUM_OPCODES = 9; 
 enum class Opcode
 {
     ADD,
@@ -28,6 +29,7 @@ enum class Opcode
     MOV,
     HALT,
 };
+
 
 enum class states
 {
@@ -143,7 +145,6 @@ public:
     }
 };
 int Warp::_id = 0;
-constexpr size_t NUM_OPCODES = 6; 
 
 using HandlerFn = ErrorCode(*)(Thread&, Warp&, std::vector<float>&, const Instr&);
 using InstrValue = std::variant<float, std::string>;
@@ -291,7 +292,7 @@ ErrorCode _halt_(Thread& t, Warp&, std::vector<float>&, const Instr&) {
 void setup_opcode_handlers() {
     opcode_handlers[static_cast<int>(Opcode::ADD)]  = _add_;
     opcode_handlers[static_cast<int>(Opcode::SUB)] = _sub_;
-    opcode_handlers[static_cast<int>(Opcode::SUB)] = _mul_;
+    opcode_handlers[static_cast<int>(Opcode::MUL)] = _mul_;
     opcode_handlers[static_cast<int>(Opcode::DIV)] = _div_;
     opcode_handlers[static_cast<int>(Opcode::NEG)] = _neg_;
     opcode_handlers[static_cast<int>(Opcode::MOV)]  = _mov_;
