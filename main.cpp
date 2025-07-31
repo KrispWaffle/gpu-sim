@@ -45,10 +45,6 @@ enum class ErrorCode {
     DivByZero,
 };
 
-
-struct registerReturnVal{
-
-};
 using Operand = std::variant<Opcode, std::string, float>;
 
 struct Instr
