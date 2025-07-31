@@ -71,18 +71,24 @@ int getRegisterName(std::string _register)
     }
     return -1;
 }
+constexpr int TIDX_RETURN_VAL = -1;
 int getMemoryLocation(std::string mem){
     std::string num = mem.substr(2);
+
+
+    if(num == "TIDX"){
+        return TIDX_RETURN_VAL;
+    }
     try
     {
         return std::stoi(num);
     }
     catch(const std::exception& e)
     {
-        std::cerr << e.what() << '\n';
-        return -1;
+        std::cerr<< "ERROR with getting mem location: "<< e.what() << '\n';
+        return -2;
     }
-    return -1;
+
     
 }
 class Thread
@@ -120,7 +126,7 @@ public:
     std::vector<std::shared_ptr<Thread>> threads;
     std::vector<float> memory;
 
-    Warp() : id_(_id++), memory(WARP_SIZE, 0.0f){}
+    Warp() : id_(_id++), memory(GLOBAL_MEM_SIZE, 0.0f){}
     int id() { return _id; }
     void addThread(std::shared_ptr<Thread> thread)
     {
@@ -226,25 +232,30 @@ ErrorCode _ld_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& i
     int dest_idx = getRegisterName(dest);
     
     if (dest.find("gm")) {
-        std::cout << "SRC INDEX: " << src_idx << std::endl;
-        if (src_idx >= global.size()) {
-            std::cerr << "LD error: global out of bounds\n";
-            return ErrorCode::GlobalOutOfBounds;
-        }else if(src_idx==-1){
+        if (src_idx == TIDX_RETURN_VAL) {
             int addr = t.id(); 
             t._registers[dest_idx] = global[addr];
+            
+        }else if(src_idx >= global.size()){
+            std::cerr << "LD error: global out of bounds\n";
+            return ErrorCode::GlobalOutOfBounds;
         }else{
             t._registers[dest_idx] = global[src_idx];
 
         }
         
-    } else if (dest.find("sm") != std::string::npos) {
-        if (src_idx >= warp.memory.size()) {
-            std::cerr << "LD error: shared out of bounds\n";
+    } else if (dest.find("sm")) {
+         if (src_idx == TIDX_RETURN_VAL) {
+            int addr = t.id(); 
+            t._registers[dest_idx] = warp.memory[addr];
             
+        }else if(src_idx >= warp.memory.size()){
+            std::cerr << "LD error: shared/warp out of bounds\n";
             return ErrorCode::SharedOutOfBounds;
+        }else{
+            t._registers[dest_idx] = warp.memory[src_idx];
+
         }
-        t._registers[dest_idx] = warp.memory[src_idx];
     } else {
         std::cerr << "LD error: invalid memory space\n";
         return ErrorCode::InvalidMemorySpace;
@@ -430,12 +441,24 @@ int main()
 {
     setup_opcode_handlers();
     std::vector<Instr> program = {
-        {Opcode::ADD, {"r0", "r0",6.0f}},
-        {Opcode::ADD, {"r1", "r1", "r0"}},
-        {Opcode::HALT, {}},
-    };
+    {Opcode::LD, {"r0", "gmTIDX"}},
+    {Opcode::ST, {"smTIDX", "r0"}},
+    {Opcode::LD, {"r1", "sm0"}},
+    {Opcode::LD, {"r2", "sm1"}},
+    {Opcode::LD, {"r3", "sm2"}},
+    {Opcode::LD, {"r0", "sm3"}},
+    {Opcode::ADD, {"r1", "r1", "r2"}},
+    {Opcode::ADD, {"r1", "r1", "r3"}},
+    {Opcode::ADD, {"r1", "r1", "r0"}},
+    {Opcode::ST, {"gm0", "r1"}},
+    {Opcode::HALT, {}},
+};
     GPU gpu(program);
-    gpu.global_memory[0] = 4.0f;
+    for (int i = 0; i < NUM_THREADS; ++i) {
+    gpu.global_memory[i] = static_cast<float>(i + 1);
+}
+    gpu.print_global_mem();
+
     gpu.run();
     std::cout << "\n--- Final Register States ---" << std::endl;
     
@@ -446,5 +469,5 @@ int main()
     std::cout<<std::endl;
     std::cout << "\nGLOBAL MEMORY\n";
     gpu.print_global_mem();
-  
+
 }
