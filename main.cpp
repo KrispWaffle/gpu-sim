@@ -17,6 +17,7 @@ constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
 constexpr int WARP_SIZE = 32;
 constexpr int SLEEP_TIME =0; // In seconds 
 constexpr size_t NUM_OPCODES = 9; 
+constexpr int NUM_VAR_LOCS=3;
 enum class Opcode
 {
     ADD,
@@ -28,6 +29,7 @@ enum class Opcode
     ST,
     MOV,
     HALT,
+    DEF,
 };
 
 
@@ -44,9 +46,24 @@ enum class ErrorCode {
     InvalidMemorySpace,
     DivByZero,
 };
+enum class StoreLoc{
+    GLOBAL,
+    SHARED,
+    LOCAL
+};
+struct Variable
+{
 
-using Operand = std::variant<Opcode, std::string, float>;
+    std::string name;
+    float value; 
+    int  offset; 
+    bool isConstant;
+    bool threadIDX;
+    StoreLoc loc;
+};
 
+
+using Operand = std::variant<Opcode, std::string, float, Variable, StoreLoc>;
 struct Instr
 {
     Opcode op;
@@ -89,6 +106,7 @@ int getMemoryLocation(std::string mem){
 
     
 }
+
 class Thread
 {
 
@@ -145,6 +163,7 @@ int Warp::_id = 0;
 using HandlerFn = ErrorCode(*)(Thread&, Warp&, std::vector<float>&, const Instr&);
 using InstrValue = std::variant<float, std::string>;
 std::array<HandlerFn, NUM_OPCODES> opcode_handlers;
+std::array<HandlerFn, NUM_VAR_LOCS> var_handlers;
 ErrorCode _add_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
@@ -224,11 +243,13 @@ ErrorCode _mov_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
 }
 
 ErrorCode _ld_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+    std::string src = std::get<std::string>(instr.src[1]);
     std::string dest = std::get<std::string>(instr.src[0]);
-    int src_idx = getMemoryLocation(std::get<std::string>(instr.src[1]));
+
+    int src_idx = getMemoryLocation(src);
     int dest_idx = getRegisterName(dest);
     
-    if (dest.find("gm")) {
+    if (src.find("gm") !=std::string::npos ) {
         if (src_idx == TIDX_RETURN_VAL) {
             int addr = t.id(); 
             t._registers[dest_idx] = global[addr];
@@ -241,7 +262,7 @@ ErrorCode _ld_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& i
 
         }
         
-    } else if (dest.find("sm")) {
+    } else if (src.find("sm") !=std::string::npos) {
          if (src_idx == TIDX_RETURN_VAL) {
             int addr = t.id(); 
             t._registers[dest_idx] = warp.memory[addr];
@@ -280,9 +301,29 @@ ErrorCode _st_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& i
     return ErrorCode::None;
 }
 
-ErrorCode _halt_(Thread& t, Warp&, std::vector<float>&, const Instr&) {
+ErrorCode _halt_(Thread& t, Warp&,std::vector<float>&,const Instr&) {
     t.active = false;
     std::cout << "[T" << t.id() << "] HALT\n";
+    return ErrorCode::None;
+}
+ErrorCode _def_(Thread& t, Warp&,std::vector<float>& global_mem,const Instr& instr) {
+    auto& var = std::get<Variable>(instr.src[0]);
+    int addr;
+    if(var.threadIDX){
+        addr = t.id();
+    }else{
+        addr = var.offset;
+    }
+    switch (std::get<StoreLoc>(instr.src[1]))
+    {
+    case StoreLoc::GLOBAL:
+        global_mem[addr] = var.value;  
+        break;
+    
+    default:
+        break;
+    }
+    
     return ErrorCode::None;
 }
 void setup_opcode_handlers() {
@@ -295,9 +336,34 @@ void setup_opcode_handlers() {
     opcode_handlers[static_cast<int>(Opcode::LD)]   = _ld_;
     opcode_handlers[static_cast<int>(Opcode::ST)]   = _st_;
     opcode_handlers[static_cast<int>(Opcode::HALT)] = _halt_;
-    
+    opcode_handlers[static_cast<int>(Opcode::DEF)] = _def_;
 }
 
+
+// ANOTHER OPTION STILL TESTING BETWEEN 
+/*
+
+ErrorCode _global_var_(Thread& t, Warp&,std::vector<float>& global,const Instr& instr){
+    Variable var= std::get<Variable>(instr.src[0]);
+
+    if(std::holds_alternative<int>(var.offset)){
+        global[std::get<int>(var.offset)] = var.value;
+        std::cout << "[T" << t.id() << "] CREATED VAR ["  << var.name << "] IN GLOBAL AT [" << std::get<int>(var.offset) << "]\n"; 
+
+    }else if(std::holds_alternative<std::string>(var.offset)){
+        std::string offsetN = std::get<std::string>(var.offset);
+        if(offsetN != "TIDX"){
+            std::cerr << "GLOBAL VAR error: invalid memory space cannot store in "  << offsetN << "\n";
+        }
+        int offset = t.id();
+        global[offset] = var.value;
+    }
+    return ErrorCode::None;
+}
+void setup_var_handlers(){
+    var_handlers[static_cast<int>(StoreLoc::GLOBAL)] = _global_var_;
+}
+*/
 class SM
 {
 public:
@@ -335,23 +401,31 @@ public:
 
 private:
     void execute(Warp& warp, const Instr& instruction) {
-        HandlerFn fn = opcode_handlers[static_cast<int>(instruction.op)];
-        if (!fn) {
-            std::cerr << "ERROR: Unknown opcode\n";
-            return;
-        }
+    HandlerFn fn = opcode_handlers[static_cast<int>(instruction.op)];        
+        /*
+        
+        if(std::holds_alternative<Opcode>(instruction.op)){
+            Opcode opcode = std::get<Opcode>(instruction.op);
+            fn =opcode_handlers[static_cast<int>(opcode)];
 
+        }else{
+            StoreLoc loc = std::get<StoreLoc>(instruction.op);
+            fn = var_handlers[static_cast<int>(loc)];
+        }
+            */
         for (auto& thread : warp.threads) {
             if (!thread->active) continue;
             fn(*thread, warp, globalMemory, instruction);
             if (thread->active) thread->pc++;
         }
+            
+
     }
 
     
 };
 
-class GPU
+class GPU   
 {
 public:
     std::vector<float> global_memory;
@@ -437,25 +511,13 @@ public:
 int main()
 {
     setup_opcode_handlers();
+   // setup_var_handlers();
     std::vector<Instr> program = {
-    {Opcode::LD, {"r0", "gmTIDX"}},
-    {Opcode::ST, {"smTIDX", "r0"}},
-    {Opcode::LD, {"r1", "sm0"}},
-    {Opcode::LD, {"r2", "sm1"}},
-    {Opcode::LD, {"r3", "sm2"}},
-    {Opcode::LD, {"r0", "sm3"}},
-    {Opcode::ADD, {"r1", "r1", "r2"}},
-    {Opcode::ADD, {"r1", "r1", "r3"}},
-    {Opcode::ADD, {"r1", "r1", "r0"}},
-    {Opcode::ST, {"gm0", "r1"}},
+    {Opcode::DEF, {Variable{"x",3.0f,0,false, true}, StoreLoc::GLOBAL}},
     {Opcode::HALT, {}},
-};
+    };
     GPU gpu(program);
-    for (int i = 0; i < NUM_THREADS; ++i) {
-    gpu.global_memory[i] = static_cast<float>(i + 1);
-}
-    gpu.print_global_mem();
-
+   
     gpu.run();
     std::cout << "\n--- Final Register States ---" << std::endl;
     
