@@ -11,6 +11,7 @@
 #include <cassert>
 #include <thread>
 #include <tuple>
+#include <unordered_map>
 constexpr int NUM_THREADS = 4;
 constexpr int NUM_REGISTERS = 4;
 constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
@@ -61,52 +62,12 @@ struct Variable
     bool threadIDX;
     StoreLoc loc;
 };
-
-
 using Operand = std::variant<Opcode, std::string, float, Variable, StoreLoc>;
 struct Instr
 {
     Opcode op;
     std::vector<Operand> src;
 };
-
-int getRegisterName(std::string _register)
-{
-    if (_register.length() > 1 && std::isalpha(static_cast<unsigned char>(_register[0])))
-    {
-        std::string num = _register.substr(1);
-        try
-        {
-            return std::stoi(num);
-        }
-        catch (const std::exception &e)
-        {
-            return -1;
-        }
-    }
-    return -1;
-}
-constexpr int TIDX_RETURN_VAL = -1;
-int getMemoryLocation(std::string mem){
-    std::string num = mem.substr(2);
-
-
-    if(num == "TIDX"){
-        return TIDX_RETURN_VAL;
-    }
-    try
-    {
-        return std::stoi(num);
-    }
-    catch(const std::exception& e)
-    {
-        std::cerr<< "ERROR with getting mem location: "<< e.what() << '\n';
-        return -2;
-    }
-
-    
-}
-
 class Thread
 {
 
@@ -132,6 +93,103 @@ public:
     void set_instruction(Instr _instruction) { intruction = _instruction; }
 };
 int Thread::_id = 0;
+
+class VarTable{
+ public:
+    VarTable(const VarTable&) =delete;
+    VarTable& operator=(const VarTable&) = delete;
+    static VarTable& getInstance(){
+        static VarTable instance;
+        return instance;
+    }
+
+
+    void addVar(const Variable& var, int thread_id) {
+        table[var.name + "_" + std::to_string(thread_id)] = var;
+    }
+
+    std::optional<Variable> getVar(const std::string& name, int thread_id) {
+        auto it = table.find(name + "_" + std::to_string(thread_id));
+        if (it != table.end()) return it->second;
+        return std::nullopt;
+    }
+
+ private:
+    VarTable() {} 
+    std::unordered_map<std::string, Variable> table;
+};
+VarTable& variable_table = VarTable::getInstance();
+
+int getRegisterName(std::string _register)
+{
+    if (_register.length() > 1 && std::isalpha(static_cast<unsigned char>(_register[0])))
+    {
+        std::string num = _register.substr(1);
+        try
+        {
+            return std::stoi(num);
+        }
+        catch (const std::exception &e)
+        {
+            return -1;
+        }
+    }
+    return -1;
+}
+enum class OpKind { Constant, Register, Variable, Invalid };
+
+struct OpInfo {
+    OpKind   kind;
+    float    constVal;   // valid if kind == Constant
+    int      index;      // reg number or memory offset/TIDX
+    Variable var;        // valid if kind == Variable
+};
+
+OpInfo decodeOperand(const Operand &op, Thread &t) {
+    if (auto pf = std::get_if<float>(&op)) {
+        return { OpKind::Constant, *pf,      0,    {} };
+    }
+
+    if (auto ps = std::get_if<std::string>(&op)) {
+        const std::string &s = *ps;
+        // register?
+        if (s.size()>1 && s[0]=='r' && std::isdigit(s[1])) {
+            int r = getRegisterName(s);
+            if (r >= 0) return { OpKind::Register, 0.0f, r, {} };
+        }
+        // otherwise, variable lookup
+        if (auto ov = variable_table.getVar(s, t.id())) {
+            Variable v = *ov;
+            int addr = v.offset;
+            float val = v.value;
+            return { OpKind::Variable, val, addr, std::move(v) };
+        }
+    }
+
+    return { OpKind::Invalid, 0.0f, -1, {} };
+}
+
+
+constexpr int TIDX_RETURN_VAL = -1;
+int getMemoryLocation(std::string mem){
+    std::string num = mem.substr(2);
+
+
+    if(num == "TIDX"){
+        return TIDX_RETURN_VAL;
+    }
+    try
+    {
+        return std::stoi(num);
+    }
+    catch(const std::exception& e)
+    {
+        std::cerr<< "ERROR with getting mem location: "<< e.what() << '\n';
+        return -2;
+    }
+
+    
+}
 class Warp
 {
 private:
@@ -164,17 +222,52 @@ using HandlerFn = ErrorCode(*)(Thread&, Warp&, std::vector<float>&, const Instr&
 using InstrValue = std::variant<float, std::string>;
 std::array<HandlerFn, NUM_OPCODES> opcode_handlers;
 std::array<HandlerFn, NUM_VAR_LOCS> var_handlers;
-ErrorCode _add_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
-    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
-    int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    auto val =0.0f;
-    if(const float* p_float = std::get_if<float>(&instr.src[2])){
-         val = *p_float;
-    }else{
-        val = t._registers[getRegisterName(std::get<std::string>(instr.src[2]))];
+ErrorCode _add_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+    OpInfo dst = decodeOperand(std::get<std::string>(instr.src[0]), t);
+    OpInfo lhs = decodeOperand(std::get<std::string>(instr.src[1]), t);
+    OpInfo rhs = decodeOperand(instr.src[2],t);
+
+    auto fetch = [&](const OpInfo &o)->float {
+        switch (o.kind) {
+          case OpKind::Constant: return o.constVal;
+          case OpKind::Register: return t._registers[o.index];
+          case OpKind::Variable:
+            switch (o.var.loc) {
+              case StoreLoc::GLOBAL: return global[o.index];
+              case StoreLoc::SHARED: return warp.memory[o.index];
+              case StoreLoc::LOCAL:  return t._registers[o.index];
+            }
+          default: return 0.0f;
+        }
+    };
+    float a = fetch(lhs);
+    float b = fetch(rhs);
+    float result = a + b;
+
+    switch (dst.kind) {
+      case OpKind::Register:
+        t._registers[dst.index] = result;
+        break;
+
+      case OpKind::Variable:
+        switch (dst.var.loc) {
+          case StoreLoc::GLOBAL: global[dst.index]      = result; break;
+          case StoreLoc::SHARED: warp.memory[dst.index] = result; break;
+          case StoreLoc::LOCAL:  t._registers[dst.index] = result; break;
+        }
+        break;
+
+      default:
+        std::cerr << "ADD: cannot write to this operand\n";
+        return ErrorCode::InvalidMemorySpace;
     }
-    t._registers[dest] = t._registers[src] + val;
-    std::cout << "[T" << t.id() << "] ADD r" << src << " + " << val << " -> r" << dest << "\n";
+    std::cout << "[T" << t.id() << "] ADD "
+              << (lhs.kind==OpKind::Register ? "r" + std::to_string(lhs.index) : std::to_string(fetch(lhs)))
+              << " + "
+              << (rhs.kind==OpKind::Register ? "r" + std::to_string(rhs.index) : std::to_string(fetch(rhs)))
+              << " -> "
+              << (dst.kind==OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
+              << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
@@ -307,17 +400,18 @@ ErrorCode _halt_(Thread& t, Warp&,std::vector<float>&,const Instr&) {
     return ErrorCode::None;
 }
 ErrorCode _def_(Thread& t, Warp&,std::vector<float>& global_mem,const Instr& instr) {
-    auto& var = std::get<Variable>(instr.src[0]);
-    int addr;
+    Variable var = std::get<Variable>(instr.src[0]);
     if(var.threadIDX){
-        addr = t.id();
-    }else{
-        addr = var.offset;
+        var.offset = t.id();
+
     }
+
+    variable_table.addVar(var,t.id());
+
     switch (std::get<StoreLoc>(instr.src[1]))
     {
     case StoreLoc::GLOBAL:
-        global_mem[addr] = var.value;  
+        global_mem[var.offset] = var.value;  
         break;
     
     default:
@@ -338,32 +432,6 @@ void setup_opcode_handlers() {
     opcode_handlers[static_cast<int>(Opcode::HALT)] = _halt_;
     opcode_handlers[static_cast<int>(Opcode::DEF)] = _def_;
 }
-
-
-// ANOTHER OPTION STILL TESTING BETWEEN 
-/*
-
-ErrorCode _global_var_(Thread& t, Warp&,std::vector<float>& global,const Instr& instr){
-    Variable var= std::get<Variable>(instr.src[0]);
-
-    if(std::holds_alternative<int>(var.offset)){
-        global[std::get<int>(var.offset)] = var.value;
-        std::cout << "[T" << t.id() << "] CREATED VAR ["  << var.name << "] IN GLOBAL AT [" << std::get<int>(var.offset) << "]\n"; 
-
-    }else if(std::holds_alternative<std::string>(var.offset)){
-        std::string offsetN = std::get<std::string>(var.offset);
-        if(offsetN != "TIDX"){
-            std::cerr << "GLOBAL VAR error: invalid memory space cannot store in "  << offsetN << "\n";
-        }
-        int offset = t.id();
-        global[offset] = var.value;
-    }
-    return ErrorCode::None;
-}
-void setup_var_handlers(){
-    var_handlers[static_cast<int>(StoreLoc::GLOBAL)] = _global_var_;
-}
-*/
 class SM
 {
 public:
@@ -474,8 +542,8 @@ public:
         return std::distance(global_memory.begin(), it);
     }
 
-    void run()
-    {
+    void run(){
+    
         long long cycle_count = 0;
         std::cout << "--- Simulation Starting ---" << std::endl;
         while (true)
@@ -497,9 +565,8 @@ public:
                 break;
 
             cycle_count++;
-            if (cycle_count > 1000)
-            { // Safety break
-                std::cerr << "Simulation timed out!" << std::endl;
+            if (cycle_count > 1000){
+                 std::cerr << "Simulation timed out!" << std::endl;
                 break;
             }
         }
@@ -507,13 +574,14 @@ public:
     }
 };
 
- 
 int main()
 {
     setup_opcode_handlers();
    // setup_var_handlers();
+   
     std::vector<Instr> program = {
-    {Opcode::DEF, {Variable{"x",3.0f,0,false, true}, StoreLoc::GLOBAL}},
+    {Opcode::DEF, {Variable{"x",3.0f,0,false, true, StoreLoc::GLOBAL}, StoreLoc::GLOBAL}},
+    {Opcode::ADD, {"x", "x", 3.0f}},
     {Opcode::HALT, {}},
     };
     GPU gpu(program);
