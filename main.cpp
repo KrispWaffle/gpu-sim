@@ -62,6 +62,7 @@ struct Variable
     bool threadIDX;
     StoreLoc loc;
 };
+
 using Operand = std::variant<Opcode, std::string, float, Variable, StoreLoc>;
 struct Instr
 {
@@ -222,98 +223,147 @@ using HandlerFn = ErrorCode(*)(Thread&, Warp&, std::vector<float>&, const Instr&
 using InstrValue = std::variant<float, std::string>;
 std::array<HandlerFn, NUM_OPCODES> opcode_handlers;
 std::array<HandlerFn, NUM_VAR_LOCS> var_handlers;
+struct ExecutionContext {
+    Thread& thread;
+    Warp& warp;
+    std::vector<float>& globalMem;
+};
+
+float fetch(const OpInfo& o, const ExecutionContext& ctx) {
+    switch (o.kind) {
+        case OpKind::Constant: return o.constVal;
+        case OpKind::Register: return ctx.thread._registers[o.index];
+        case OpKind::Variable:
+            switch (o.var.loc) {
+                case StoreLoc::GLOBAL: return ctx.globalMem[o.index];
+                case StoreLoc::SHARED: return ctx.warp.memory[o.index];
+                case StoreLoc::LOCAL:  return ctx.thread._registers[o.index];
+            }
+        default:
+            throw std::runtime_error("ERROR in fetch: unsupported operand kind");
+    }
+}
+
+float eval(const OpInfo& lhs, const OpInfo& rhs, Opcode op, const ExecutionContext& ctx) {
+    float a = fetch(lhs, ctx);
+    float b = fetch(rhs, ctx);
+
+    switch (op) {
+        case Opcode::ADD: return a + b;
+        case Opcode::SUB: return a - b;
+        case Opcode::MUL: return a * b;
+        case Opcode::DIV:
+            if (b == 0.0f) throw std::runtime_error("ERROR in DIV: cannot divide by zero");
+            return a / b;
+        default:
+            throw std::runtime_error("ERROR in eval: unsupported opcode");
+    }
+}
+
+ErrorCode storeInLocation(OpInfo& dst, float result, ExecutionContext& ctx) {
+    switch (dst.kind) {
+        case OpKind::Register:
+            ctx.thread._registers[dst.index] = result;
+            break;
+        case OpKind::Variable:
+            switch (dst.var.loc) {
+                case StoreLoc::GLOBAL: ctx.globalMem[dst.index] = result; break;
+                case StoreLoc::SHARED: ctx.warp.memory[dst.index] = result; break;
+                case StoreLoc::LOCAL:  ctx.thread._registers[dst.index] = result; break;
+            }
+            break;
+        default:
+            std::cerr << "ERROR in storing result: cannot write to this operand\n";
+            return ErrorCode::InvalidMemorySpace;
+    }
+    return ErrorCode::None;
+}
+
 ErrorCode _add_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+    ExecutionContext ctx{t, warp, global};
     OpInfo dst = decodeOperand(std::get<std::string>(instr.src[0]), t);
     OpInfo lhs = decodeOperand(std::get<std::string>(instr.src[1]), t);
     OpInfo rhs = decodeOperand(instr.src[2],t);
 
-    auto fetch = [&](const OpInfo &o)->float {
-        switch (o.kind) {
-          case OpKind::Constant: return o.constVal;
-          case OpKind::Register: return t._registers[o.index];
-          case OpKind::Variable:
-            switch (o.var.loc) {
-              case StoreLoc::GLOBAL: return global[o.index];
-              case StoreLoc::SHARED: return warp.memory[o.index];
-              case StoreLoc::LOCAL:  return t._registers[o.index];
-            }
-          default: return 0.0f;
-        }
+    float result = eval(lhs, rhs, Opcode::ADD, ctx);
+    ErrorCode err = storeInLocation(dst, result, ctx);
+    if (err != ErrorCode::None) return err;
+    auto printOperand = [&](const OpInfo& op) -> std::string {
+        if (op.kind == OpKind::Register) return "r" + std::to_string(op.index);
+        return std::to_string(fetch(op, ctx));
     };
-    float a = fetch(lhs);
-    float b = fetch(rhs);
-    float result = a + b;
 
-    switch (dst.kind) {
-      case OpKind::Register:
-        t._registers[dst.index] = result;
-        break;
-
-      case OpKind::Variable:
-        switch (dst.var.loc) {
-          case StoreLoc::GLOBAL: global[dst.index]      = result; break;
-          case StoreLoc::SHARED: warp.memory[dst.index] = result; break;
-          case StoreLoc::LOCAL:  t._registers[dst.index] = result; break;
-        }
-        break;
-
-      default:
-        std::cerr << "ADD: cannot write to this operand\n";
-        return ErrorCode::InvalidMemorySpace;
-    }
     std::cout << "[T" << t.id() << "] ADD "
-              << (lhs.kind==OpKind::Register ? "r" + std::to_string(lhs.index) : std::to_string(fetch(lhs)))
-              << " + "
-              << (rhs.kind==OpKind::Register ? "r" + std::to_string(rhs.index) : std::to_string(fetch(rhs)))
-              << " -> "
-              << (dst.kind==OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
+              << printOperand(lhs) << " + "
+              << printOperand(rhs) << " -> "
+              << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
               << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
-ErrorCode _sub_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
-    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
-    int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    auto val =0.0f;
-    if(const float* p_float = std::get_if<float>(&instr.src[2])){
-         val = *p_float;
-    }else{
-        val = t._registers[getRegisterName(std::get<std::string>(instr.src[2]))];
-    }
-    t._registers[dest] = t._registers[src] - val;
-    std::cout << "[T" << t.id() << "] SUB r" << src << " - " << val << " -> r" << dest << "\n";
+ErrorCode _sub_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+    ExecutionContext ctx{t, warp, global};
+    OpInfo dst = decodeOperand(std::get<std::string>(instr.src[0]), t);
+    OpInfo lhs = decodeOperand(std::get<std::string>(instr.src[1]), t);
+    OpInfo rhs = decodeOperand(instr.src[2],t);
+
+    float result = eval(lhs, rhs, Opcode::SUB, ctx);
+    ErrorCode err = storeInLocation(dst, result, ctx);
+    if (err != ErrorCode::None) return err;
+    auto printOperand = [&](const OpInfo& op) -> std::string {
+        if (op.kind == OpKind::Register) return "r" + std::to_string(op.index);
+        return std::to_string(fetch(op, ctx));
+    };
+
+    std::cout << "[T" << t.id() << "] SUB "
+              << printOperand(lhs) << " - "
+              << printOperand(rhs) << " -> "
+              << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
+              << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
-ErrorCode _mul_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
-    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
-    int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    auto val =0.0f;
-    if(const float* p_float = std::get_if<float>(&instr.src[2])){
-         val = *p_float;
-    }else{
-        val = t._registers[getRegisterName(std::get<std::string>(instr.src[2]))];
-    }
-    t._registers[dest] = t._registers[src] * val;
-    std::cout << "[T" << t.id() << "] MUL r" << src << " * " << val << " -> r" << dest << "\n";
+ErrorCode _mul_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+    ExecutionContext ctx{t, warp, global};
+    OpInfo dst = decodeOperand(std::get<std::string>(instr.src[0]), t);
+    OpInfo lhs = decodeOperand(std::get<std::string>(instr.src[1]), t);
+    OpInfo rhs = decodeOperand(instr.src[2],t);
+
+    float result = eval(lhs, rhs, Opcode::MUL, ctx);
+    ErrorCode err = storeInLocation(dst, result, ctx);
+    if (err != ErrorCode::None) return err;
+    auto printOperand = [&](const OpInfo& op) -> std::string {
+        if (op.kind == OpKind::Register) return "r" + std::to_string(op.index);
+        return std::to_string(fetch(op, ctx));
+    };
+
+    std::cout << "[T" << t.id() << "] MUL "
+              << printOperand(lhs) << " * "
+              << printOperand(rhs) << " -> "
+              << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
+              << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
-ErrorCode _div_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
-    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
-    int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    auto val =0.0f;
-    if(const float* p_float = std::get_if<float>(&instr.src[2])){
-         val = *p_float;
-    }else{
-        val = t._registers[getRegisterName(std::get<std::string>(instr.src[2]))];
-    }
-    if(val==0){
-        std::cout << "DIV error: cannot divide by zero\n";
-        return ErrorCode::DivByZero;
-    }
-    t._registers[dest] = t._registers[src] / val;
-    std::cout << "[T" << t.id() << "] DIV r" << src << " / " << val << " -> r" << dest << "\n";
+ErrorCode _div_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+    ExecutionContext ctx{t, warp, global};
+    OpInfo dst = decodeOperand(std::get<std::string>(instr.src[0]), t);
+    OpInfo lhs = decodeOperand(std::get<std::string>(instr.src[1]), t);
+    OpInfo rhs = decodeOperand(instr.src[2],t);
+
+    float result = eval(lhs, rhs, Opcode::DIV, ctx);
+    ErrorCode err = storeInLocation(dst, result, ctx);
+    if (err != ErrorCode::None) return err;
+    auto printOperand = [&](const OpInfo& op) -> std::string {
+        if (op.kind == OpKind::Register) return "r" + std::to_string(op.index);
+        return std::to_string(fetch(op, ctx));
+    };
+
+    std::cout << "[T" << t.id() << "] DIV "
+              << printOperand(lhs) << " / "
+              << printOperand(rhs) << " -> "
+              << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
+              << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
@@ -470,17 +520,6 @@ public:
 private:
     void execute(Warp& warp, const Instr& instruction) {
     HandlerFn fn = opcode_handlers[static_cast<int>(instruction.op)];        
-        /*
-        
-        if(std::holds_alternative<Opcode>(instruction.op)){
-            Opcode opcode = std::get<Opcode>(instruction.op);
-            fn =opcode_handlers[static_cast<int>(opcode)];
-
-        }else{
-            StoreLoc loc = std::get<StoreLoc>(instruction.op);
-            fn = var_handlers[static_cast<int>(loc)];
-        }
-            */
         for (auto& thread : warp.threads) {
             if (!thread->active) continue;
             fn(*thread, warp, globalMemory, instruction);
