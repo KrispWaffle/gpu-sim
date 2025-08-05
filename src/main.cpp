@@ -256,7 +256,7 @@ float eval(const OpInfo& lhs, const OpInfo& rhs, Opcode op, const ExecutionConte
             if (b == 0.0f) throw std::runtime_error("ERROR in DIV: cannot divide by zero");
             return a / b;
         default:
-            throw std::runtime_error("ERROR in eval: unsupported opcode");
+            throw std::runtime_error("EVAL error: unsupported opcode");
     }
 }
 
@@ -273,7 +273,7 @@ ErrorCode storeInLocation(OpInfo& dst, float result, ExecutionContext& ctx) {
             }
             break;
         default:
-            std::cerr << "ERROR in storing result: cannot write to this operand\n";
+            std::cerr << "STORING RESULT error: cannot write to this operand\n";
             return ErrorCode::InvalidMemorySpace;
     }
     return ErrorCode::None;
@@ -449,7 +449,7 @@ ErrorCode _halt_(Thread& t, Warp&,std::vector<float>&,const Instr&) {
     std::cout << "[T" << t.id() << "] HALT\n";
     return ErrorCode::None;
 }
-ErrorCode _def_(Thread& t, Warp&,std::vector<float>& global_mem,const Instr& instr) {
+ErrorCode _def_(Thread& t, Warp& warp,std::vector<float>& global_mem,const Instr& instr) {
     Variable var = std::get<Variable>(instr.src[0]);
     if(var.threadIDX){
         var.offset = t.id();
@@ -463,7 +463,20 @@ ErrorCode _def_(Thread& t, Warp&,std::vector<float>& global_mem,const Instr& ins
     case StoreLoc::GLOBAL:
         global_mem[var.offset] = var.value;  
         break;
-    
+    case StoreLoc::LOCAL:
+        if(var.offset>NUM_REGISTERS){
+            std::cerr << "VAR DEF error: variable offset larger than register count\n";
+            break;
+        }
+        t._registers[var.offset] = var.value;
+        break;
+    case StoreLoc::SHARED:
+        if(var.offset>GLOBAL_MEM_SIZE){
+            std::cerr << "VAR DEF error: variable offset larger than warp mem size\n";
+            break;
+        }
+        warp.memory[var.offset] = var.value;
+        break;
     default:
         break;
     }
@@ -619,8 +632,8 @@ int main()
    // setup_var_handlers();
    
     std::vector<Instr> program = {
-    {Opcode::DEF, {Variable{"x",3.0f,0,false, true, StoreLoc::GLOBAL}, StoreLoc::GLOBAL}},
-    {Opcode::ADD, {"x", "x", 3.0f}},
+    {Opcode::DEF, {Variable{"x",3.0f,0,false, true, StoreLoc::LOCAL}, StoreLoc::LOCAL}},
+    {Opcode::SUB, {"x", "x", 2.0f}},
     {Opcode::HALT, {}},
     };
     GPU gpu(program);
