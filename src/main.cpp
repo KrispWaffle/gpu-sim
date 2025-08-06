@@ -14,8 +14,8 @@
 #include <unordered_map>
 constexpr int NUM_THREADS = 4;
 constexpr int NUM_REGISTERS = 4;
-constexpr int GLOBAL_MEM_SIZE = 100;
-constexpr int WARP_SIZE = 32;
+constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
+constexpr int WARP_SIZE = NUM_THREADS;
 constexpr int SLEEP_TIME =0; // In seconds 
 constexpr size_t NUM_OPCODES = 9; 
 constexpr int NUM_VAR_LOCS=3;
@@ -83,7 +83,7 @@ public:
     int id() { return id_; }
     void printRegisters()
     {
-        std::cout << "\nTHREAD: " << this->id_ << "";
+        std::cout << "THREAD: " << this->id_ << "";
         for(int x =0; x<_registers.size(); x++){
             std::cout<< "\nREG: " << x << " VALUE: " << _registers[x];;
             
@@ -157,7 +157,7 @@ int getMemoryLocation(std::string mem){
 
     
 }
-enum class OpKind { Constant, Register, Variable, GLOBAL,Invalid };
+enum class OpKind { Constant, Register, Variable, Global,Shared,Invalid };
 
 struct OpInfo {
     OpKind   kind;
@@ -172,14 +172,26 @@ OpInfo decodeOperand(const Operand &op, Thread &t) {
     }
 
     if (auto ps = std::get_if<std::string>(&op)) {
+        int tid=t.id();
         const std::string &s = *ps;
         // register?
         if (s.size()>1 && s[0]=='r' && std::isdigit(s[1])) {
             int r = getRegisterName(s);
             if (r >= 0) return { OpKind::Register, 0.0f, r, {} };
-        }else if(s.size()>1 && s.substr(0,2) == "gm" && std::isdigit(s[2])){
+        }else if(s.size()>1 && s.substr(0,2) == "gm" ){
             int g = getMemoryLocation(s) ;
-            if(g>=0) return {OpKind::GLOBAL, 0.0f, g, {}};
+            if(g=0){
+                return {OpKind::Global, 0.0f, g, {}};
+            }else if(g==-1){
+                return {OpKind::Global, 0.0f, tid, {}};
+            }
+        }else if(s.size()>1 && s.substr(0,2) == "sm" ){
+           const int f = getMemoryLocation(s);
+            if(f==0){
+                return {OpKind::Shared, 0.0f, f, {}};
+            }else if(f==-1){
+                return {OpKind::Shared, 0.0f, tid, {}};
+            }
         }
         // otherwise, variable lookup
         if (auto ov = variable_table.getVar(s, t.id())) {
@@ -220,6 +232,12 @@ public:
         }
         return true;
     }
+    void wSharedMem(){
+        for(auto& i : memory){
+            std::cout << i << ", ";
+
+        }
+    }
 };
 int Warp::_id = 0;
 
@@ -237,7 +255,8 @@ float fetch(const OpInfo& o, const ExecutionContext& ctx) {
     switch (o.kind) {
         case OpKind::Constant: return o.constVal;
         case OpKind::Register: return ctx.thread._registers[o.index];
-        case OpKind::GLOBAL: return ctx.globalMem[o.index];
+        case OpKind::Global: return ctx.globalMem[o.index];
+        case OpKind::Shared: return ctx.warp.memory[o.index];
         case OpKind::Variable:
             switch (o.var.loc) {
                 case StoreLoc::GLOBAL: return ctx.globalMem[o.index];
@@ -271,8 +290,12 @@ ErrorCode storeInLocation(OpInfo& dst, float result, ExecutionContext& ctx) {
             
             ctx.thread._registers[dst.index] = result;
             break;
-        case OpKind::GLOBAL:
+        case OpKind::Global:
             ctx.globalMem[dst.index] = result;
+            break;
+        case OpKind::Shared: 
+            ctx.warp.memory[dst.index] = result;
+            break;
         case OpKind::Variable:
             switch (dst.var.loc) {
                 case StoreLoc::GLOBAL: ctx.globalMem[dst.index] = result; break;
@@ -301,7 +324,7 @@ ErrorCode _add_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
         return std::to_string(fetch(op, ctx));
     };
 
-    std::cout << "[T" << t.id() << "] ADD "
+    std::cout << "\n[T" << t.id() << "] ADD "
               << printOperand(lhs) << " + "
               << printOperand(rhs) << " -> "
               << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
@@ -466,7 +489,7 @@ ErrorCode _def_(Thread& t, Warp& warp,std::vector<float>& global_mem,const Instr
 
     variable_table.addVar(var,t.id());
 
-    switch (std::get<StoreLoc>(instr.src[1]))
+    switch (var.loc)
     {
     case StoreLoc::GLOBAL:
         global_mem[var.offset] = var.value;  
@@ -579,6 +602,16 @@ public:
             sms[0].addWarp(new_warp);
         }
     }
+
+    void print_shared_mem(){
+        std::cout << "\n";
+        for(int i = 0; i<sms.size(); i++){
+            for(auto j : sms[i].warps){
+                j.wSharedMem();
+            }
+        }
+        std::cout << "\n";
+    }
     void print_global_mem(){
         for(const auto& m: this->global_memory){
         std::cout << m << ", ";
@@ -633,13 +666,11 @@ public:
 
 int main()
 {
-    setup_opcode_handlers();
-   // setup_var_handlers();
-   
-    std::vector<Instr> program = {
-    {Opcode::DEF, {Variable{"x",3.0f,0,false, true, StoreLoc::GLOBAL}, StoreLoc::GLOBAL}},
-    {Opcode::DEF, {Variable{"z", 3.0f,0, false, true, StoreLoc::LOCAL},StoreLoc::LOCAL}},
-    {Opcode::ADD, {"gm10", "x", "z"}},
+    setup_opcode_handlers();   
+     std::vector<Instr> program = {
+    {Opcode::DEF, {Variable{"x",3.0f,0,false, true, StoreLoc::GLOBAL}}},
+    {Opcode::DEF, {Variable{"z", 3.0f,0, false, true, StoreLoc::LOCAL}}},
+    {Opcode::ADD, {"smTIDX", "x", "z"}},
     {Opcode::HALT, {}},
     };
     GPU gpu(program);
@@ -648,10 +679,13 @@ int main()
     std::cout << "\n--- Final Register States ---" << std::endl;
     
     for (const auto& thread : gpu.all_threads) {
+        std::cout<< "\n";
         thread->printRegisters();
     }
     std::cout<<std::endl;
     std::cout << "\nGLOBAL MEMORY\n";
     gpu.print_global_mem();
+    std::cout << "\n Warp/Shared MEMORY\n";
+    gpu.print_shared_mem();
 
 }
