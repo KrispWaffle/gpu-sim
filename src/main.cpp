@@ -14,7 +14,7 @@
 #include <unordered_map>
 constexpr int NUM_THREADS = 4;
 constexpr int NUM_REGISTERS = 4;
-constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
+constexpr int GLOBAL_MEM_SIZE = 100;
 constexpr int WARP_SIZE = 32;
 constexpr int SLEEP_TIME =0; // In seconds 
 constexpr size_t NUM_OPCODES = 9; 
@@ -137,40 +137,6 @@ int getRegisterName(std::string _register)
     }
     return -1;
 }
-enum class OpKind { Constant, Register, Variable, Invalid };
-
-struct OpInfo {
-    OpKind   kind;
-    float    constVal;   // valid if kind == Constant
-    int      index;      // reg number or memory offset/TIDX
-    Variable var;        // valid if kind == Variable
-};
-
-OpInfo decodeOperand(const Operand &op, Thread &t) {
-    if (auto pf = std::get_if<float>(&op)) {
-        return { OpKind::Constant, *pf,      0,    {} };
-    }
-
-    if (auto ps = std::get_if<std::string>(&op)) {
-        const std::string &s = *ps;
-        // register?
-        if (s.size()>1 && s[0]=='r' && std::isdigit(s[1])) {
-            int r = getRegisterName(s);
-            if (r >= 0) return { OpKind::Register, 0.0f, r, {} };
-        }
-        // otherwise, variable lookup
-        if (auto ov = variable_table.getVar(s, t.id())) {
-            Variable v = *ov;
-            int addr = v.offset;
-            float val = v.value;
-            return { OpKind::Variable, val, addr, std::move(v) };
-        }
-    }
-
-    return { OpKind::Invalid, 0.0f, -1, {} };
-}
-
-
 constexpr int TIDX_RETURN_VAL = -1;
 int getMemoryLocation(std::string mem){
     std::string num = mem.substr(2);
@@ -191,6 +157,44 @@ int getMemoryLocation(std::string mem){
 
     
 }
+enum class OpKind { Constant, Register, Variable, GLOBAL,Invalid };
+
+struct OpInfo {
+    OpKind   kind;
+    float    constVal;   // valid if kind == Constant
+    int      index;      // reg number or memory offset/TIDX
+    Variable var;        // valid if kind == Variable
+};
+
+OpInfo decodeOperand(const Operand &op, Thread &t) {
+    if (auto pf = std::get_if<float>(&op)) {
+        return { OpKind::Constant, *pf,      0,    {} };
+    }
+
+    if (auto ps = std::get_if<std::string>(&op)) {
+        const std::string &s = *ps;
+        // register?
+        if (s.size()>1 && s[0]=='r' && std::isdigit(s[1])) {
+            int r = getRegisterName(s);
+            if (r >= 0) return { OpKind::Register, 0.0f, r, {} };
+        }else if(s.size()>1 && s.substr(0,2) == "gm" && std::isdigit(s[2])){
+            int g = getMemoryLocation(s) ;
+            if(g>=0) return {OpKind::GLOBAL, 0.0f, g, {}};
+        }
+        // otherwise, variable lookup
+        if (auto ov = variable_table.getVar(s, t.id())) {
+            Variable v = *ov;
+            int addr = v.offset;
+            float val = v.value;
+            return { OpKind::Variable, val, addr, std::move(v) };
+        }
+    }
+
+    return { OpKind::Invalid, 0.0f, -1, {} };
+}
+
+
+
 class Warp
 {
 private:
@@ -233,6 +237,7 @@ float fetch(const OpInfo& o, const ExecutionContext& ctx) {
     switch (o.kind) {
         case OpKind::Constant: return o.constVal;
         case OpKind::Register: return ctx.thread._registers[o.index];
+        case OpKind::GLOBAL: return ctx.globalMem[o.index];
         case OpKind::Variable:
             switch (o.var.loc) {
                 case StoreLoc::GLOBAL: return ctx.globalMem[o.index];
@@ -263,8 +268,11 @@ float eval(const OpInfo& lhs, const OpInfo& rhs, Opcode op, const ExecutionConte
 ErrorCode storeInLocation(OpInfo& dst, float result, ExecutionContext& ctx) {
     switch (dst.kind) {
         case OpKind::Register:
+            
             ctx.thread._registers[dst.index] = result;
             break;
+        case OpKind::GLOBAL:
+            ctx.globalMem[dst.index] = result;
         case OpKind::Variable:
             switch (dst.var.loc) {
                 case StoreLoc::GLOBAL: ctx.globalMem[dst.index] = result; break;
@@ -541,10 +549,7 @@ private:
             
 
     }
-
-    
 };
-
 class GPU   
 {
 public:
@@ -632,8 +637,9 @@ int main()
    // setup_var_handlers();
    
     std::vector<Instr> program = {
-    {Opcode::DEF, {Variable{"x",3.0f,0,false, true, StoreLoc::LOCAL}, StoreLoc::LOCAL}},
-    {Opcode::SUB, {"x", "x", 2.0f}},
+    {Opcode::DEF, {Variable{"x",3.0f,0,false, true, StoreLoc::GLOBAL}, StoreLoc::GLOBAL}},
+    {Opcode::DEF, {Variable{"z", 3.0f,0, false, true, StoreLoc::LOCAL},StoreLoc::LOCAL}},
+    {Opcode::ADD, {"gm10", "x", "z"}},
     {Opcode::HALT, {}},
     };
     GPU gpu(program);
