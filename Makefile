@@ -1,4 +1,4 @@
-SRC = main.cpp
+SRC = src/main.cpp
 OUT = main
 
 all: $(OUT)
