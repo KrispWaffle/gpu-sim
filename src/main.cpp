@@ -17,7 +17,7 @@ constexpr int NUM_REGISTERS = 4;
 constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
 constexpr int WARP_SIZE = NUM_THREADS;
 constexpr int SLEEP_TIME =0; // In seconds 
-constexpr size_t NUM_OPCODES = 9; 
+constexpr size_t NUM_OPCODES = 10; 
 constexpr int NUM_VAR_LOCS=3;
 enum class Opcode
 {
@@ -120,24 +120,27 @@ class VarTable{
     std::unordered_map<std::string, Variable> table;
 };
 VarTable& variable_table = VarTable::getInstance();
+constexpr int TIDX_RETURN_VAL = -1;
 
 int getRegisterName(std::string _register)
 {
     if (_register.length() > 1 && std::isalpha(static_cast<unsigned char>(_register[0])))
     {
         std::string num = _register.substr(1);
+        if(num == "TIDX"){
+        return TIDX_RETURN_VAL;
+        }
         try
         {
             return std::stoi(num);
         }
         catch (const std::exception &e)
         {
-            return -1;
+            return -2;
         }
     }
-    return -1;
+    return -2;
 }
-constexpr int TIDX_RETURN_VAL = -1;
 int getMemoryLocation(std::string mem){
     std::string num = mem.substr(2);
 
@@ -175,12 +178,16 @@ OpInfo decodeOperand(const Operand &op, Thread &t) {
         int tid=t.id();
         const std::string &s = *ps;
         // register?
-        if (s.size()>1 && s[0]=='r' && std::isdigit(s[1])) {
+        if (s.size()>1 && s[0]=='r') {
             int r = getRegisterName(s);
-            if (r >= 0) return { OpKind::Register, 0.0f, r, {} };
+            if(r==0){
+                return {OpKind::Global, 0.0f, r, {}};
+            }else if(r==-1){
+                return {OpKind::Global, 0.0f, tid, {}};
+            }
         }else if(s.size()>1 && s.substr(0,2) == "gm" ){
             int g = getMemoryLocation(s) ;
-            if(g=0){
+            if(g==0){
                 return {OpKind::Global, 0.0f, g, {}};
             }else if(g==-1){
                 return {OpKind::Global, 0.0f, tid, {}};
@@ -264,6 +271,7 @@ float fetch(const OpInfo& o, const ExecutionContext& ctx) {
                 case StoreLoc::LOCAL:  return ctx.thread._registers[o.index];
             }
         default:
+            std::cout << static_cast<int>(o.kind) << "\n";
             throw std::runtime_error("ERROR in fetch: unsupported operand kind");
     }
 }
@@ -279,8 +287,10 @@ float eval(const OpInfo& lhs, const OpInfo& rhs, Opcode op, const ExecutionConte
         case Opcode::DIV:
             if (b == 0.0f) throw std::runtime_error("ERROR in DIV: cannot divide by zero");
             return a / b;
+        case Opcode::MOV:
+            return b;
         default:
-            throw std::runtime_error("EVAL error: unsupported opcode");
+            throw std::runtime_error("ERROR in EVAL: unsupported opcode");
     }
 }
 
@@ -304,7 +314,7 @@ ErrorCode storeInLocation(OpInfo& dst, float result, ExecutionContext& ctx) {
             }
             break;
         default:
-            std::cerr << "STORING RESULT error: cannot write to this operand\n";
+            std::cerr << "ERROR in STORING RESULT: cannot write to this operand\n";
             return ErrorCode::InvalidMemorySpace;
     }
     return ErrorCode::None;
@@ -312,8 +322,8 @@ ErrorCode storeInLocation(OpInfo& dst, float result, ExecutionContext& ctx) {
 
 ErrorCode _add_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
     ExecutionContext ctx{t, warp, global};
-    OpInfo dst = decodeOperand(std::get<std::string>(instr.src[0]), t);
-    OpInfo lhs = decodeOperand(std::get<std::string>(instr.src[1]), t);
+    OpInfo dst = decodeOperand(instr.src[0], t);
+    OpInfo lhs = decodeOperand(instr.src[1], t);
     OpInfo rhs = decodeOperand(instr.src[2],t);
 
     float result = eval(lhs, rhs, Opcode::ADD, ctx);
@@ -334,8 +344,8 @@ ErrorCode _add_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
 }
 ErrorCode _sub_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
     ExecutionContext ctx{t, warp, global};
-    OpInfo dst = decodeOperand(std::get<std::string>(instr.src[0]), t);
-    OpInfo lhs = decodeOperand(std::get<std::string>(instr.src[1]), t);
+    OpInfo dst = decodeOperand(instr.src[0], t);
+    OpInfo lhs = decodeOperand(instr.src[1], t);
     OpInfo rhs = decodeOperand(instr.src[2],t);
 
     float result = eval(lhs, rhs, Opcode::SUB, ctx);
@@ -356,8 +366,8 @@ ErrorCode _sub_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
 }
 ErrorCode _mul_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
     ExecutionContext ctx{t, warp, global};
-    OpInfo dst = decodeOperand(std::get<std::string>(instr.src[0]), t);
-    OpInfo lhs = decodeOperand(std::get<std::string>(instr.src[1]), t);
+    OpInfo dst = decodeOperand(instr.src[0], t);
+    OpInfo lhs = decodeOperand(instr.src[1], t);
     OpInfo rhs = decodeOperand(instr.src[2],t);
 
     float result = eval(lhs, rhs, Opcode::MUL, ctx);
@@ -378,8 +388,8 @@ ErrorCode _mul_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
 }
 ErrorCode _div_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
     ExecutionContext ctx{t, warp, global};
-    OpInfo dst = decodeOperand(std::get<std::string>(instr.src[0]), t);
-    OpInfo lhs = decodeOperand(std::get<std::string>(instr.src[1]), t);
+    OpInfo dst = decodeOperand(instr.src[0], t);
+    OpInfo lhs = decodeOperand(instr.src[1], t);
     OpInfo rhs = decodeOperand(instr.src[2],t);
 
     float result = eval(lhs, rhs, Opcode::DIV, ctx);
@@ -402,16 +412,19 @@ ErrorCode _div_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
 ErrorCode _neg_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int dest = getRegisterName(std::get<std::string>(instr.src[0]));
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
+    
     t._registers[dest] = -1*t._registers[src];
     std::cout << "[T" << t.id() << "] NEG r" << src << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
-ErrorCode _mov_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
-    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
-    int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    t._registers[dest] = t._registers[src];
-    std::cout << "[T" << t.id() << "] MOV r" << src << " -> r" << dest+1 << "\n";
+ErrorCode _mov_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
+    ExecutionContext ctx{t, warp, global};
+    OpInfo dest = decodeOperand(instr.src[0],t);
+    OpInfo src = decodeOperand(instr.src[1],t);
+    float result = eval(dest, src, Opcode::MOV, ctx);
+    t._registers[dest.index] = result;
+    std::cout << "[T" << t.id() << "] MOV r" << src.index << " -> r" << dest.index << "\n";
     t.printRegisters();
     return ErrorCode::None;
 }
@@ -470,7 +483,7 @@ ErrorCode _st_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& i
         std::cerr << "ST error: invalid memory space\n";
         return ErrorCode::InvalidMemorySpace;
     }
-    std::cout << "[T" << t.id() << "] ST r" << src_idx+1 << " -> " << dest << "[" << addr << "]\n";
+    std::cout << "[T" << t.id() << "] ST r" << src_idx<< " -> " << dest << "[" << addr << "]\n";
     t.printRegisters();
     return ErrorCode::None;
 }
@@ -668,11 +681,10 @@ int main()
 {
     setup_opcode_handlers();   
      std::vector<Instr> program = {
-    {Opcode::DEF, {Variable{"x",3.0f,0,false, true, StoreLoc::GLOBAL}}},
-    {Opcode::DEF, {Variable{"z", 3.0f,0, false, true, StoreLoc::LOCAL}}},
-    {Opcode::ADD, {"smTIDX", "x", "z"}},
-    {Opcode::HALT, {}},
-    };
+    {Opcode::MOV, {"r0", 3.0f}},
+    {Opcode::HALT, {}}
+};
+
     GPU gpu(program);
    
     gpu.run();
@@ -685,7 +697,7 @@ int main()
     std::cout<<std::endl;
     std::cout << "\nGLOBAL MEMORY\n";
     gpu.print_global_mem();
-    std::cout << "\n Warp/Shared MEMORY\n";
+    std::cout << "\nWarp/Shared MEMORY\n";
     gpu.print_shared_mem();
 
 }
