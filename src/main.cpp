@@ -12,6 +12,10 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+#include <GLFW/glfw3.h>
 constexpr int NUM_THREADS = 4;
 constexpr int NUM_REGISTERS = 4;
 constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
@@ -83,7 +87,7 @@ public:
     int id() { return id_; }
     void printRegisters()
     {
-        std::cout << "THREAD: " << this->id_ << "";
+        std::cout << "\nTHREAD: " << this->id_ << "";
         for(int x =0; x<_registers.size(); x++){
             std::cout<< "\nREG: " << x << " VALUE: " << _registers[x];;
             
@@ -159,6 +163,28 @@ int getMemoryLocation(std::string mem){
     }
 
     
+}
+int parseRegIdx(const std::string &s ){
+    if(s.size()>1 && s[0] == 'r'){
+        std::string num = s.substr(1);
+        if(num=="TIDX") return TIDX_RETURN_VAL;
+        try{
+            return std::stoi(num);
+        }catch(...){return -2;}
+    }
+    return -2;
+}
+int parseMemIdx(const std::string &s ){
+    if(s.size()>2){
+        std::string num = s.substr(2);
+        if(num=="TIDX") return TIDX_RETURN_VAL;
+        try{
+            return std::stoi(num);
+        }catch(...){return -2;}
+ 
+    }
+    return -2;
+
 }
 enum class OpKind { Constant, Register, Variable, Global,Shared,Invalid };
 
@@ -424,8 +450,8 @@ ErrorCode _mov_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
     OpInfo src = decodeOperand(instr.src[1],t);
     float result = eval(dest, src, Opcode::MOV, ctx);
     t._registers[dest.index] = result;
-    std::cout << "[T" << t.id() << "] MOV r" << src.index << " -> r" << dest.index << "\n";
     t.printRegisters();
+    std::cout << "[T" << t.id() << "] MOV r" << src.index << " -> r" << dest.index << "\n";
     return ErrorCode::None;
 }
 
@@ -691,13 +717,68 @@ int main()
     std::cout << "\n--- Final Register States ---" << std::endl;
     
     for (const auto& thread : gpu.all_threads) {
-        std::cout<< "\n";
         thread->printRegisters();
     }
     std::cout<<std::endl;
     std::cout << "\nGLOBAL MEMORY\n";
     gpu.print_global_mem();
-    std::cout << "\nWarp/Shared MEMORY\n";
+    std::cout << "\nWarp/Shared MEMORY";
     gpu.print_shared_mem();
+    if (!glfwInit())
+        return -1;
 
+    GLFWwindow* window = glfwCreateWindow(800, 600, "NEURO GPU", NULL, NULL);
+    if (!window) {
+        glfwTerminate();
+        return -1;
+    }
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+
+    ImGui::StyleColorsDark();
+
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 130");
+
+    while (!glfwWindowShouldClose(window)) {
+        glfwPollEvents();
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        ImGui::Begin("Hello, ImGui!");
+        ImGui::Text("GPU");
+        static float f = 0.0f;
+        ImGui::SliderFloat("float", &f, 0.0f, 1.0f);
+        if (ImGui::Button("Close")) glfwSetWindowShouldClose(window, true);
+        ImGui::End();
+        ImGui::Begin("Window 1");
+        ImGui::Text("This is the first window");
+        ImGui::End();
+
+        ImGui::Begin("Window 2");
+        ImGui::Text("This is the second window");
+        ImGui::End();
+        ImGui::Render();
+        int display_w, display_h;
+        glfwGetFramebufferSize(window, &display_w, &display_h);
+        glViewport(0, 0, display_w, display_h);
+        glClearColor(0.45f, 0.55f, 0.60f, 1.00f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        glfwSwapBuffers(window);
+    }
+
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    return 0;
 }
