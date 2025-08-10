@@ -33,6 +33,8 @@ float eval(const OpInfo& lhs, const OpInfo& rhs, Opcode op, const ExecutionConte
             return a / b;
         case Opcode::MOV:
             return b;
+        case Opcode::NEG:
+            return b*-1;
         default:
             throw std::runtime_error("eval unsupported opcode");
     }

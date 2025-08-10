@@ -11,7 +11,7 @@ int getRegisterName(std::string _register)
     {
         std::string num = _register.substr(1);
         if(num == "TIDX"){
-            return -1; // TIDX_RETURN_VAL
+            return TIDX_RETURN_VAL; // TIDX_RETURN_VAL
         }
         try
         {
@@ -28,7 +28,7 @@ int getRegisterName(std::string _register)
 int getMemoryLocation(std::string mem){
     std::string num = mem.substr(2);
     if(num == "TIDX"){
-        return -1; // TIDX_RETURN_VAL
+        return TIDX_RETURN_VAL; // TIDX_RETURN_VAL
     }
     try
     {

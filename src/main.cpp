@@ -39,16 +39,16 @@ int main()
     setup_opcode_handlers();
 
     std::vector<Instr> program = {
-        {Opcode::MOV, {"r0", 3.0f}},
-        {Opcode::ADD, {"r0", "r0", 2.0f}},
-
+        // Define registers
+        {Opcode::DEF, {Variable{"x", 3.0f, 0, false, true, StoreLoc::GLOBAL}}},
+        {Opcode::ADD, {"r0", "x", 3.0f}},
         {Opcode::HALT, {}}};
 
     GPU gpu(program);
 
     GUI gui;
-    bool threadView = false;
-    bool memoryView = false;
+    bool threadView = true;
+    bool memoryView = true;
     bool logs = true;
     bool simRunning = false;
     while (!gui.shouldClose())
@@ -82,6 +82,9 @@ int main()
 
         if (threadView)
         {
+            ImGui::SetNextWindowPos(ImVec2(10, 30), ImGuiCond_Once);
+            ImGui::SetNextWindowSize(ImVec2(360, 450), ImGuiCond_Once);
+
             ImGui::Begin("Thread Viewer", &threadView);
             for (auto &thread : gpu.all_threads)
             {
@@ -110,8 +113,10 @@ int main()
 
         if (memoryView)
         {
-            ImGui::Begin("Memory Viewer", &memoryView);
+            ImGui::SetNextWindowPos(ImVec2(370, 30), ImGuiCond_Once);
+            ImGui::SetNextWindowSize(ImVec2(500, 500), ImGuiCond_Once);
 
+            ImGui::Begin("Memory Viewer", &memoryView);
             if (ImGui::CollapsingHeader("Global Memory", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 if (ImGui::BeginTable("GlobalMemTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
@@ -156,11 +161,15 @@ int main()
                     }
                 }
             }
+
             ImGui::End();
         }
 
         if (logs)
         {
+            ImGui::SetNextWindowPos(ImVec2(10, 490), ImGuiCond_Once);
+            ImGui::SetNextWindowSize(ImVec2(860, 200), ImGuiCond_Once);
+
             ImGui::Begin("Logs", &logs);
             {
                 std::lock_guard<std::mutex> lock(consoleCapture.mtx);
@@ -174,6 +183,9 @@ int main()
             }
             ImGui::End();
         }
+        float height = 70 + (gpu.all_threads.size() * ImGui::GetTextLineHeightWithSpacing());
+        ImGui::SetNextWindowPos(ImVec2(880, 30), ImGuiCond_Once);
+        ImGui::SetNextWindowSize(ImVec2(250, height), ImGuiCond_Once);
 
         ImGui::Begin("Status");
         ImGui::Text("Current Cycle: %i", gpu.get_cycle());
@@ -181,7 +193,8 @@ int main()
         {
             ImGui::Text("Thread %i status: %s", thread->id(), thread->active ? "active" : "inactive");
         }
-        if(ImGui::Button("reset")){
+        if (ImGui::Button("reset"))
+        {
             gpu.reset();
         }
         ImGui::End();
