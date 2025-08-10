@@ -5,7 +5,7 @@
 
 int Thread::_id = 0;
 
-Thread::Thread() : id_(_id++), pc(0), _registers(NUM_REGISTERS, 0.0f), active(false) {}
+Thread::Thread() : id_(_id++), pc(0), _registers(NUM_REGISTERS, 0.0f), active(true) {}
 void Thread::printRegisters() const {
     std::cout << "\nTHREAD: " << id_ << "\n";
     for (size_t x = 0; x < _registers.size(); x++) {
@@ -76,7 +76,6 @@ GPU::GPU(const std::vector<Instr>& program) : program(program), global_memory(GL
     sms.emplace_back(0, global_memory);
     for (int i = 0; i < NUM_THREADS; i++) {
         Thread t;
-        t.active = true;
         all_threads.push_back(std::make_shared<Thread>(t));
     }
     for (int i = 0; i < NUM_THREADS; i += WARP_SIZE) {
@@ -88,27 +87,42 @@ GPU::GPU(const std::vector<Instr>& program) : program(program), global_memory(GL
     }
 }
 
-void GPU::run() {
-    
-    std::cout << "--- Simulation Starting ---" << std::endl;
-    while (true) {
-        bool all_sms_finished = true;
-        for (auto& sm : sms) {
-            sm.cycle(program);
-            for (const auto& warp : sm.warps) {
-                if (!warp.isFinished()) {
-                    all_sms_finished = false;
+void GPU::run()
+{
+    running = true;
+    finished = false;
+
+    worker = std::thread([this]() {
+        std::cout << "--- Simulation Starting ---"<< std::endl;
+        bool all_sms_finished = false; 
+
+        while (running && !all_sms_finished) {
+            all_sms_finished = true;
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                for (auto& sm : sms) {
+                    sm.cycle(program);
+                    for (const auto& warp : sm.warps) {
+                        if (!warp.isFinished()) {
+                            all_sms_finished = false;
+                        }
+                    }
                 }
+                cycle_count++;
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10)); 
         }
-        if (all_sms_finished) break;
-        cycle_count++;
-        if (cycle_count > 1000) {
-            std::cerr << "Simulation timed out!" << std::endl;
-            break;
-        }
-    }
-    std::cout << "\n--- Simulation Finished in " << cycle_count << " cycles ---" << std::endl;
+
+        finished = true;
+        std::cout << "\n--- Simulation Finished in " << cycle_count << " cycles ---"<< std::endl;
+    });
+
+}
+
+void GPU::stop()
+{
+    running = false;
+    if (worker.joinable()) worker.join();
 }
 
 void GPU::print_shared_mem() const {
@@ -130,4 +144,19 @@ void GPU::print_global_mem() const {
 int GPU::get_cycle() const
 {
     return cycle_count;
+}
+
+void GPU::reset() {
+    cycle_count = 0;
+    for (auto& t : all_threads) {
+        t->pc = 0;
+        t->active = true;
+        std::fill(t->_registers.begin(), t->_registers.end(), 0.0f);
+    }
+    std::fill(global_memory.begin(), global_memory.end(), 0.0f);
+    for (auto& sm : sms) {
+        for (auto& warp : sm.warps) {
+            std::fill(warp.memory.begin(), warp.memory.end(), 0.0f);
+        }
+    }
 }

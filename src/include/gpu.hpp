@@ -3,6 +3,10 @@
 #include <vector>
 #include <memory>
 #include <config.hpp>
+#include <thread>
+#include <mutex>
+#include <atomic>
+
 class Thread {
 public:
     static int _id;
@@ -47,9 +51,20 @@ public:
     std::vector<std::shared_ptr<Thread>> all_threads;
     std::vector<Instr> program;
     long long cycle_count;
+
+    std::thread worker;
+    std::mutex mtx;
+    std::atomic<bool> running{false};
+    std::atomic<bool> finished{false};
+
     GPU(const std::vector<Instr>& program);
+
     void run();
+
+    void stop();
+
     void print_shared_mem() const;
     void print_global_mem() const;
     int get_cycle() const;
+    void reset();
 };
