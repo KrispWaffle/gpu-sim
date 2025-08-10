@@ -46,8 +46,10 @@ public:
     std::vector<SM> sms;
     std::vector<std::shared_ptr<Thread>> all_threads;
     std::vector<Instr> program;
+    long long cycle_count;
     GPU(const std::vector<Instr>& program);
     void run();
     void print_shared_mem() const;
     void print_global_mem() const;
+    int get_cycle() const;
 };

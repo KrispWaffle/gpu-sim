@@ -72,7 +72,7 @@ void SM::execute(Warp& warp, const Instr& instruction) {
     }
 }
 
-GPU::GPU(const std::vector<Instr>& program) : program(program), global_memory(GLOBAL_MEM_SIZE, 0.0f) {
+GPU::GPU(const std::vector<Instr>& program) : program(program), global_memory(GLOBAL_MEM_SIZE, 0.0f), cycle_count(0) {
     sms.emplace_back(0, global_memory);
     for (int i = 0; i < NUM_THREADS; i++) {
         Thread t;
@@ -89,7 +89,7 @@ GPU::GPU(const std::vector<Instr>& program) : program(program), global_memory(GL
 }
 
 void GPU::run() {
-    long long cycle_count = 0;
+    
     std::cout << "--- Simulation Starting ---" << std::endl;
     while (true) {
         bool all_sms_finished = true;
@@ -108,7 +108,7 @@ void GPU::run() {
             break;
         }
     }
-    std::cout << "--- Simulation Finished in " << cycle_count << " cycles ---" << std::endl;
+    std::cout << "\n--- Simulation Finished in " << cycle_count << " cycles ---" << std::endl;
 }
 
 void GPU::print_shared_mem() const {
@@ -126,4 +126,8 @@ void GPU::print_global_mem() const {
         std::cout << m << ", ";
     }
     std::cout << "\n";
+}
+int GPU::get_cycle() const
+{
+    return cycle_count;
 }

@@ -31,13 +31,13 @@ ErrorCode _add_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
         if (op.kind == OpKind::Register) return "r" + std::to_string(op.index);
         return std::to_string(fetch(op, ctx));
     };
-
+    
     std::cout << "\n[T" << t.id() << "] ADD "
               << printOperand(lhs) << " + "
               << printOperand(rhs) << " -> "
               << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
               << "\n";
-    t.printRegisters();
+     
     return ErrorCode::None;
 }
 ErrorCode _sub_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
@@ -54,12 +54,12 @@ ErrorCode _sub_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
         return std::to_string(fetch(op, ctx));
     };
 
-    std::cout << "[T" << t.id() << "] SUB "
+    std::cout << "\n[T" << t.id() << "] SUB "
               << printOperand(lhs) << " - "
               << printOperand(rhs) << " -> "
               << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
               << "\n";
-    t.printRegisters();
+     
     return ErrorCode::None;
 }
 ErrorCode _mul_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
@@ -76,12 +76,12 @@ ErrorCode _mul_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
         return std::to_string(fetch(op, ctx));
     };
 
-    std::cout << "[T" << t.id() << "] MUL "
+    std::cout << "\n[T" << t.id() << "] MUL "
               << printOperand(lhs) << " * "
               << printOperand(rhs) << " -> "
               << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
               << "\n";
-    t.printRegisters();
+     
     return ErrorCode::None;
 }
 ErrorCode _div_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
@@ -98,12 +98,12 @@ ErrorCode _div_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
         return std::to_string(fetch(op, ctx));
     };
 
-    std::cout << "[T" << t.id() << "] DIV "
+    std::cout << "\n[T" << t.id() << "] DIV "
               << printOperand(lhs) << " / "
               << printOperand(rhs) << " -> "
               << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
               << "\n";
-    t.printRegisters();
+     
     return ErrorCode::None;
 }
 
@@ -112,8 +112,8 @@ ErrorCode _neg_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
     int src = getRegisterName(std::get<std::string>(instr.src[1]));
     
     t._registers[dest] = -1*t._registers[src];
-    std::cout << "[T" << t.id() << "] NEG r" << src << "\n";
-    t.printRegisters();
+    std::cout << "\n[T" << t.id() << "] NEG r" << src << "\n";
+     
     return ErrorCode::None;
 }
 ErrorCode _mov_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
@@ -122,12 +122,12 @@ ErrorCode _mov_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
     OpInfo src = decodeOperand(instr.src[1],t);
     float result = eval(dest, src, Opcode::MOV, ctx);
     t._registers[dest.index] = result;
-    t.printRegisters();
+     
     if(src.kind == OpKind::Register){
-        std::cout << "[T" << t.id() << "] MOV r" << src.index << " -> r" << dest.index << "\n";
+        std::cout << "\n[T" << t.id() << "] MOV r" << src.index << " -> r" << dest.index << "\n";
 
     }else{
-        std::cout << "[T" << t.id() << "] MOV " << src.constVal << " -> r" << dest.index << "\n";
+        std::cout << "\n[T" << t.id() << "] MOV " << src.constVal << " -> r" << dest.index << "\n";
 
     }
     return ErrorCode::None;
@@ -169,8 +169,8 @@ ErrorCode _ld_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& i
         std::cerr << "LD error: invalid memory space\n";
         return ErrorCode::InvalidMemorySpace;
     }
-    std::cout << "[T" << t.id() << "] LD " << dest << " <- [" << src_idx << "]\n";
-    t.printRegisters();
+    std::cout << "\n[T" << t.id() << "] LD " << dest << " <- [" << src_idx << "]\n";
+     
     return ErrorCode::None;
 }
 
@@ -187,14 +187,14 @@ ErrorCode _st_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& i
         std::cerr << "ST error: invalid memory space\n";
         return ErrorCode::InvalidMemorySpace;
     }
-    std::cout << "[T" << t.id() << "] ST r" << src_idx<< " -> " << dest << "[" << addr << "]\n";
-    t.printRegisters();
+    std::cout << "\n[T" << t.id() << "] ST r" << src_idx<< " -> " << dest << "[" << addr << "]\n";
+     
     return ErrorCode::None;
 }
 
 ErrorCode _halt_(Thread& t, Warp&,std::vector<float>&,const Instr&) {
     t.active = false;
-    std::cout << "[T" << t.id() << "] HALT\n";
+    std::cout << "\n[T" << t.id() << "] HALT\n";
     return ErrorCode::None;
 }
 
