@@ -1,703 +1,206 @@
+#include "gpu.hpp"
+#include "handlers.hpp"
+#include "gui.hpp"
 #include <iostream>
-#include <vector>
-#include <algorithm>
-#include <variant>
+#include <sstream>
 #include <string>
-#include <stdexcept>
-#include <array>
-#include <optional>
-#include <cstddef>
-#include <memory>
-#include <cassert>
-#include <thread>
-#include <tuple>
-#include <unordered_map>
-constexpr int NUM_THREADS = 4;
-constexpr int NUM_REGISTERS = 4;
-constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
-constexpr int WARP_SIZE = NUM_THREADS;
-constexpr int SLEEP_TIME =0; // In seconds 
-constexpr size_t NUM_OPCODES = 10; 
-constexpr int NUM_VAR_LOCS=3;
-enum class Opcode
-{
-    ADD,
-    SUB,
-    MUL,
-    DIV,
-    NEG,
-    LD,
-    ST,
-    MOV,
-    HALT,
-    DEF,
-};
+#include <mutex>
 
-
-enum class states
-{
-    IDLE,
-    ACTIVE,
-    FINISHED
-};
-enum class ErrorCode {
-    None,
-    GlobalOutOfBounds,
-    SharedOutOfBounds,
-    InvalidMemorySpace,
-    DivByZero,
-};
-enum class StoreLoc{
-    GLOBAL,
-    SHARED,
-    LOCAL
-};
-struct Variable
-{
-
-    std::string name;
-    float value; 
-    int  offset; 
-    bool isConstant;
-    bool threadIDX;
-    StoreLoc loc;
-};
-
-using Operand = std::variant<Opcode, std::string, float, Variable, StoreLoc>;
-struct Instr
-{
-    Opcode op;
-    std::vector<Operand> src;
-};
-class Thread
-{
-
-public:
-    size_t pc;
-    int id_;
-    Instr intruction;
-    static int _id;
-    std::vector<float> _registers;
-    bool active;
-    Thread() : id_(_id++), pc(0), _registers(NUM_REGISTERS, 0.0f), active(false) {}
-    int id() { return id_; }
-    void printRegisters()
-    {
-        std::cout << "THREAD: " << this->id_ << "";
-        for(int x =0; x<_registers.size(); x++){
-            std::cout<< "\nREG: " << x << " VALUE: " << _registers[x];;
-            
-        }
-        
-        std::cout << std::endl;
-    }
-    void set_instruction(Instr _instruction) { intruction = _instruction; }
-};
-int Thread::_id = 0;
-
-class VarTable{
- public:
-    VarTable(const VarTable&) =delete;
-    VarTable& operator=(const VarTable&) = delete;
-    static VarTable& getInstance(){
-        static VarTable instance;
-        return instance;
-    }
-
-
-    void addVar(const Variable& var, int thread_id) {
-        table[var.name + "_" + std::to_string(thread_id)] = var;
-    }
-
-    std::optional<Variable> getVar(const std::string& name, int thread_id) {
-        auto it = table.find(name + "_" + std::to_string(thread_id));
-        if (it != table.end()) return it->second;
-        return std::nullopt;
-    }
-
- private:
-    VarTable() {} 
-    std::unordered_map<std::string, Variable> table;
-};
-VarTable& variable_table = VarTable::getInstance();
-constexpr int TIDX_RETURN_VAL = -1;
-
-int getRegisterName(std::string _register)
-{
-    if (_register.length() > 1 && std::isalpha(static_cast<unsigned char>(_register[0])))
-    {
-        std::string num = _register.substr(1);
-        if(num == "TIDX"){
-        return TIDX_RETURN_VAL;
-        }
-        try
-        {
-            return std::stoi(num);
-        }
-        catch (const std::exception &e)
-        {
-            return -2;
-        }
-    }
-    return -2;
-}
-int getMemoryLocation(std::string mem){
-    std::string num = mem.substr(2);
-
-
-    if(num == "TIDX"){
-        return TIDX_RETURN_VAL;
-    }
-    try
-    {
-        return std::stoi(num);
-    }
-    catch(const std::exception& e)
-    {
-        std::cerr<< "ERROR with getting mem location: "<< e.what() << '\n';
-        return -2;
-    }
-
-    
-}
-enum class OpKind { Constant, Register, Variable, Global,Shared,Invalid };
-
-struct OpInfo {
-    OpKind   kind;
-    float    constVal;   // valid if kind == Constant
-    int      index;      // reg number or memory offset/TIDX
-    Variable var;        // valid if kind == Variable
-};
-
-OpInfo decodeOperand(const Operand &op, Thread &t) {
-    if (auto pf = std::get_if<float>(&op)) {
-        return { OpKind::Constant, *pf,      0,    {} };
-    }
-
-    if (auto ps = std::get_if<std::string>(&op)) {
-        int tid=t.id();
-        const std::string &s = *ps;
-        // register?
-        if (s.size()>1 && s[0]=='r') {
-            int r = getRegisterName(s);
-            if(r==0){
-                return {OpKind::Global, 0.0f, r, {}};
-            }else if(r==-1){
-                return {OpKind::Global, 0.0f, tid, {}};
-            }
-        }else if(s.size()>1 && s.substr(0,2) == "gm" ){
-            int g = getMemoryLocation(s) ;
-            if(g==0){
-                return {OpKind::Global, 0.0f, g, {}};
-            }else if(g==-1){
-                return {OpKind::Global, 0.0f, tid, {}};
-            }
-        }else if(s.size()>1 && s.substr(0,2) == "sm" ){
-           const int f = getMemoryLocation(s);
-            if(f==0){
-                return {OpKind::Shared, 0.0f, f, {}};
-            }else if(f==-1){
-                return {OpKind::Shared, 0.0f, tid, {}};
-            }
-        }
-        // otherwise, variable lookup
-        if (auto ov = variable_table.getVar(s, t.id())) {
-            Variable v = *ov;
-            int addr = v.offset;
-            float val = v.value;
-            return { OpKind::Variable, val, addr, std::move(v) };
-        }
-    }
-
-    return { OpKind::Invalid, 0.0f, -1, {} };
-}
-
-
-
-class Warp
-{
-private:
-    static int _id;
-
-public:
-    int id_;
-    std::vector<std::shared_ptr<Thread>> threads;
-    std::vector<float> memory;
-
-    Warp() : id_(_id++), memory(GLOBAL_MEM_SIZE, 0.0f){}
-    int id() { return _id; }
-    void addThread(std::shared_ptr<Thread> thread)
-    {
-        threads.push_back(thread);
-    }
-    bool isFinished() const
-    {
-        for (const auto &t : threads)
-        {
-            if (t->active)
-                return false;
-        }
-        return true;
-    }
-    void wSharedMem(){
-        for(auto& i : memory){
-            std::cout << i << ", ";
-
-        }
-    }
-};
-int Warp::_id = 0;
-
-using HandlerFn = ErrorCode(*)(Thread&, Warp&, std::vector<float>&, const Instr&);
-using InstrValue = std::variant<float, std::string>;
-std::array<HandlerFn, NUM_OPCODES> opcode_handlers;
-std::array<HandlerFn, NUM_VAR_LOCS> var_handlers;
-struct ExecutionContext {
-    Thread& thread;
-    Warp& warp;
-    std::vector<float>& globalMem;
-};
-
-float fetch(const OpInfo& o, const ExecutionContext& ctx) {
-    switch (o.kind) {
-        case OpKind::Constant: return o.constVal;
-        case OpKind::Register: return ctx.thread._registers[o.index];
-        case OpKind::Global: return ctx.globalMem[o.index];
-        case OpKind::Shared: return ctx.warp.memory[o.index];
-        case OpKind::Variable:
-            switch (o.var.loc) {
-                case StoreLoc::GLOBAL: return ctx.globalMem[o.index];
-                case StoreLoc::SHARED: return ctx.warp.memory[o.index];
-                case StoreLoc::LOCAL:  return ctx.thread._registers[o.index];
-            }
-        default:
-            std::cout << static_cast<int>(o.kind) << "\n";
-            throw std::runtime_error("ERROR in fetch: unsupported operand kind");
-    }
-}
-
-float eval(const OpInfo& lhs, const OpInfo& rhs, Opcode op, const ExecutionContext& ctx) {
-    float a = fetch(lhs, ctx);
-    float b = fetch(rhs, ctx);
-
-    switch (op) {
-        case Opcode::ADD: return a + b;
-        case Opcode::SUB: return a - b;
-        case Opcode::MUL: return a * b;
-        case Opcode::DIV:
-            if (b == 0.0f) throw std::runtime_error("ERROR in DIV: cannot divide by zero");
-            return a / b;
-        case Opcode::MOV:
-            return b;
-        default:
-            throw std::runtime_error("ERROR in EVAL: unsupported opcode");
-    }
-}
-
-ErrorCode storeInLocation(OpInfo& dst, float result, ExecutionContext& ctx) {
-    switch (dst.kind) {
-        case OpKind::Register:
-            
-            ctx.thread._registers[dst.index] = result;
-            break;
-        case OpKind::Global:
-            ctx.globalMem[dst.index] = result;
-            break;
-        case OpKind::Shared: 
-            ctx.warp.memory[dst.index] = result;
-            break;
-        case OpKind::Variable:
-            switch (dst.var.loc) {
-                case StoreLoc::GLOBAL: ctx.globalMem[dst.index] = result; break;
-                case StoreLoc::SHARED: ctx.warp.memory[dst.index] = result; break;
-                case StoreLoc::LOCAL:  ctx.thread._registers[dst.index] = result; break;
-            }
-            break;
-        default:
-            std::cerr << "ERROR in STORING RESULT: cannot write to this operand\n";
-            return ErrorCode::InvalidMemorySpace;
-    }
-    return ErrorCode::None;
-}
-
-ErrorCode _add_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
-    ExecutionContext ctx{t, warp, global};
-    OpInfo dst = decodeOperand(instr.src[0], t);
-    OpInfo lhs = decodeOperand(instr.src[1], t);
-    OpInfo rhs = decodeOperand(instr.src[2],t);
-
-    float result = eval(lhs, rhs, Opcode::ADD, ctx);
-    ErrorCode err = storeInLocation(dst, result, ctx);
-    if (err != ErrorCode::None) return err;
-    auto printOperand = [&](const OpInfo& op) -> std::string {
-        if (op.kind == OpKind::Register) return "r" + std::to_string(op.index);
-        return std::to_string(fetch(op, ctx));
-    };
-
-    std::cout << "\n[T" << t.id() << "] ADD "
-              << printOperand(lhs) << " + "
-              << printOperand(rhs) << " -> "
-              << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
-              << "\n";
-    t.printRegisters();
-    return ErrorCode::None;
-}
-ErrorCode _sub_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
-    ExecutionContext ctx{t, warp, global};
-    OpInfo dst = decodeOperand(instr.src[0], t);
-    OpInfo lhs = decodeOperand(instr.src[1], t);
-    OpInfo rhs = decodeOperand(instr.src[2],t);
-
-    float result = eval(lhs, rhs, Opcode::SUB, ctx);
-    ErrorCode err = storeInLocation(dst, result, ctx);
-    if (err != ErrorCode::None) return err;
-    auto printOperand = [&](const OpInfo& op) -> std::string {
-        if (op.kind == OpKind::Register) return "r" + std::to_string(op.index);
-        return std::to_string(fetch(op, ctx));
-    };
-
-    std::cout << "[T" << t.id() << "] SUB "
-              << printOperand(lhs) << " - "
-              << printOperand(rhs) << " -> "
-              << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
-              << "\n";
-    t.printRegisters();
-    return ErrorCode::None;
-}
-ErrorCode _mul_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
-    ExecutionContext ctx{t, warp, global};
-    OpInfo dst = decodeOperand(instr.src[0], t);
-    OpInfo lhs = decodeOperand(instr.src[1], t);
-    OpInfo rhs = decodeOperand(instr.src[2],t);
-
-    float result = eval(lhs, rhs, Opcode::MUL, ctx);
-    ErrorCode err = storeInLocation(dst, result, ctx);
-    if (err != ErrorCode::None) return err;
-    auto printOperand = [&](const OpInfo& op) -> std::string {
-        if (op.kind == OpKind::Register) return "r" + std::to_string(op.index);
-        return std::to_string(fetch(op, ctx));
-    };
-
-    std::cout << "[T" << t.id() << "] MUL "
-              << printOperand(lhs) << " * "
-              << printOperand(rhs) << " -> "
-              << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
-              << "\n";
-    t.printRegisters();
-    return ErrorCode::None;
-}
-ErrorCode _div_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
-    ExecutionContext ctx{t, warp, global};
-    OpInfo dst = decodeOperand(instr.src[0], t);
-    OpInfo lhs = decodeOperand(instr.src[1], t);
-    OpInfo rhs = decodeOperand(instr.src[2],t);
-
-    float result = eval(lhs, rhs, Opcode::DIV, ctx);
-    ErrorCode err = storeInLocation(dst, result, ctx);
-    if (err != ErrorCode::None) return err;
-    auto printOperand = [&](const OpInfo& op) -> std::string {
-        if (op.kind == OpKind::Register) return "r" + std::to_string(op.index);
-        return std::to_string(fetch(op, ctx));
-    };
-
-    std::cout << "[T" << t.id() << "] DIV "
-              << printOperand(lhs) << " / "
-              << printOperand(rhs) << " -> "
-              << (dst.kind == OpKind::Register ? "r" + std::to_string(dst.index) : dst.var.name)
-              << "\n";
-    t.printRegisters();
-    return ErrorCode::None;
-}
-
-ErrorCode _neg_(Thread& t, Warp&, std::vector<float>&, const Instr& instr) {
-    int dest = getRegisterName(std::get<std::string>(instr.src[0]));
-    int src = getRegisterName(std::get<std::string>(instr.src[1]));
-    
-    t._registers[dest] = -1*t._registers[src];
-    std::cout << "[T" << t.id() << "] NEG r" << src << "\n";
-    t.printRegisters();
-    return ErrorCode::None;
-}
-ErrorCode _mov_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
-    ExecutionContext ctx{t, warp, global};
-    OpInfo dest = decodeOperand(instr.src[0],t);
-    OpInfo src = decodeOperand(instr.src[1],t);
-    float result = eval(dest, src, Opcode::MOV, ctx);
-    t._registers[dest.index] = result;
-    std::cout << "[T" << t.id() << "] MOV r" << src.index << " -> r" << dest.index << "\n";
-    t.printRegisters();
-    return ErrorCode::None;
-}
-
-ErrorCode _ld_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
-    std::string src = std::get<std::string>(instr.src[1]);
-    std::string dest = std::get<std::string>(instr.src[0]);
-
-    int src_idx = getMemoryLocation(src);
-    int dest_idx = getRegisterName(dest);
-    
-    if (src.find("gm") !=std::string::npos ) {
-        if (src_idx == TIDX_RETURN_VAL) {
-            int addr = t.id(); 
-            t._registers[dest_idx] = global[addr];
-            
-        }else if(src_idx >= global.size()){
-            std::cerr << "LD error: global out of bounds\n";
-            return ErrorCode::GlobalOutOfBounds;
-        }else{
-            t._registers[dest_idx] = global[src_idx];
-
-        }
-        
-    } else if (src.find("sm") !=std::string::npos) {
-         if (src_idx == TIDX_RETURN_VAL) {
-            int addr = t.id(); 
-            t._registers[dest_idx] = warp.memory[addr];
-            
-        }else if(src_idx >= warp.memory.size()){
-            std::cerr << "LD error: shared/warp out of bounds\n";
-            return ErrorCode::SharedOutOfBounds;
-        }else{
-            t._registers[dest_idx] = warp.memory[src_idx];
-
-        }
-    } else {
-        std::cerr << "LD error: invalid memory space\n";
-        return ErrorCode::InvalidMemorySpace;
-    }
-    std::cout << "[T" << t.id() << "] LD " << dest << " <- [" << src_idx << "]\n";
-    t.printRegisters();
-    return ErrorCode::None;
-}
-
-ErrorCode _st_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr) {
-    std::string dest = std::get<std::string>(instr.src[0]);
-    int src_idx = getRegisterName(std::get<std::string>(instr.src[1]));
-    int addr = t.id(); 
-
-    if (dest.find("gm") != std::string::npos) {
-        global[addr] = t._registers[src_idx];
-    } else if (dest.find("sm") != std::string::npos) {
-        warp.memory[addr] = t._registers[src_idx];
-    } else {
-        std::cerr << "ST error: invalid memory space\n";
-        return ErrorCode::InvalidMemorySpace;
-    }
-    std::cout << "[T" << t.id() << "] ST r" << src_idx<< " -> " << dest << "[" << addr << "]\n";
-    t.printRegisters();
-    return ErrorCode::None;
-}
-
-ErrorCode _halt_(Thread& t, Warp&,std::vector<float>&,const Instr&) {
-    t.active = false;
-    std::cout << "[T" << t.id() << "] HALT\n";
-    return ErrorCode::None;
-}
-ErrorCode _def_(Thread& t, Warp& warp,std::vector<float>& global_mem,const Instr& instr) {
-    Variable var = std::get<Variable>(instr.src[0]);
-    if(var.threadIDX){
-        var.offset = t.id();
-
-    }
-
-    variable_table.addVar(var,t.id());
-
-    switch (var.loc)
-    {
-    case StoreLoc::GLOBAL:
-        global_mem[var.offset] = var.value;  
-        break;
-    case StoreLoc::LOCAL:
-        if(var.offset>NUM_REGISTERS){
-            std::cerr << "VAR DEF error: variable offset larger than register count\n";
-            break;
-        }
-        t._registers[var.offset] = var.value;
-        break;
-    case StoreLoc::SHARED:
-        if(var.offset>GLOBAL_MEM_SIZE){
-            std::cerr << "VAR DEF error: variable offset larger than warp mem size\n";
-            break;
-        }
-        warp.memory[var.offset] = var.value;
-        break;
-    default:
-        break;
-    }
-    
-    return ErrorCode::None;
-}
-void setup_opcode_handlers() {
-    opcode_handlers[static_cast<int>(Opcode::ADD)]  = _add_;
-    opcode_handlers[static_cast<int>(Opcode::SUB)] = _sub_;
-    opcode_handlers[static_cast<int>(Opcode::MUL)] = _mul_;
-    opcode_handlers[static_cast<int>(Opcode::DIV)] = _div_;
-    opcode_handlers[static_cast<int>(Opcode::NEG)] = _neg_;
-    opcode_handlers[static_cast<int>(Opcode::MOV)]  = _mov_;
-    opcode_handlers[static_cast<int>(Opcode::LD)]   = _ld_;
-    opcode_handlers[static_cast<int>(Opcode::ST)]   = _st_;
-    opcode_handlers[static_cast<int>(Opcode::HALT)] = _halt_;
-    opcode_handlers[static_cast<int>(Opcode::DEF)] = _def_;
-}
-class SM
+class ConsoleCapture : public std::stringbuf
 {
 public:
-    int id;
-    std::vector<Warp> warps;
-    std::vector<float> &globalMemory;
-    SM(int sm_id, std::vector<float> &memory) : id(sm_id), globalMemory(memory) {}
-    void addWarp(const Warp &warp)
+    std::string log;
+    std::mutex mtx;
+
+protected:
+    int sync() override
     {
-        warps.push_back(warp);
+        std::lock_guard<std::mutex> lock(mtx);
+        log += str(); // Append to log
+        str("");      // Clear buffer
+        return 0;
     }
-    void cycle(const std::vector<Instr> &program)
+};
+
+ConsoleCapture consoleCapture;
+std::streambuf *oldCoutBuf = nullptr;
+
+void startConsoleCapture()
+{
+    oldCoutBuf = std::cout.rdbuf(&consoleCapture);
+}
+
+void stopConsoleCapture()
+{
+    std::cout.rdbuf(oldCoutBuf);
+}
+int main()
+{
+    setup_opcode_handlers();
+
+    std::vector<Instr> program = {
+        // Define registers
+        {Opcode::DEF, {Variable{"x", 3.0f, 0, false, true, StoreLoc::GLOBAL}}},
+        {Opcode::ADD, {"r0", "x", 3.0f}},
+        {Opcode::HALT, {}}};
+
+    GPU gpu(program);
+
+    GUI gui;
+    bool threadView = true;
+    bool memoryView = true;
+    bool logs = true;
+    bool simRunning = false;
+    while (!gui.shouldClose())
     {
+        gui.beginFrame();
 
-        for (auto &warp : warps)
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+        ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
+
+        if (ImGui::BeginMainMenuBar())
         {
-            if (warp.isFinished())
-                continue;
-
-            size_t shared_pc = 0;
-            for (const auto &t : warp.threads)
+            if (ImGui::BeginMenu("Gpu"))
             {
-                if (t->active)
+                if (ImGui::MenuItem("Run Program"))
                 {
-                    shared_pc = t->pc;
-                    break;
+                    startConsoleCapture();
+                    gpu.run();
+                }
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("View"))
+            {
+                ImGui::MenuItem("Thread Viewer", nullptr, &threadView);
+                ImGui::MenuItem("Memory Viewer", nullptr, &memoryView);
+                ImGui::MenuItem("Logs", nullptr, &logs);
+                ImGui::EndMenu();
+            }
+            ImGui::EndMainMenuBar();
+        }
+
+        if (threadView)
+        {
+            ImGui::SetNextWindowPos(ImVec2(10, 30), ImGuiCond_Once);
+            ImGui::SetNextWindowSize(ImVec2(360, 450), ImGuiCond_Once);
+
+            ImGui::Begin("Thread Viewer", &threadView);
+            for (auto &thread : gpu.all_threads)
+            {
+                ImGui::SeparatorText(("Thread " + std::to_string(thread->id())).c_str());
+
+                if (ImGui::BeginTable(("Registers##" + std::to_string(thread->id())).c_str(), 2,
+                                      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                {
+                    ImGui::TableSetupColumn("Register");
+                    ImGui::TableSetupColumn("Value");
+                    ImGui::TableHeadersRow();
+
+                    for (int j = 0; j < thread->_registers.size(); j++)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("R%d", j);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.6f", thread->_registers[j]);
+                    }
+                    ImGui::EndTable();
+                }
+            }
+            ImGui::End();
+        }
+
+        if (memoryView)
+        {
+            ImGui::SetNextWindowPos(ImVec2(370, 30), ImGuiCond_Once);
+            ImGui::SetNextWindowSize(ImVec2(500, 500), ImGuiCond_Once);
+
+            ImGui::Begin("Memory Viewer", &memoryView);
+            if (ImGui::CollapsingHeader("Global Memory", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                if (ImGui::BeginTable("GlobalMemTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                {
+                    ImGui::TableSetupColumn("Address");
+                    ImGui::TableSetupColumn("Value");
+                    ImGui::TableHeadersRow();
+
+                    for (size_t addr = 0; addr < gpu.global_memory.size(); addr++)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("0x%04zx", addr);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%f", gpu.global_memory[addr]);
+                    }
+                    ImGui::EndTable();
                 }
             }
 
-            const Instr &instruction = program[shared_pc];
-
-            this->execute(warp, instruction);
-        }
-    }
-
-private:
-    void execute(Warp& warp, const Instr& instruction) {
-    HandlerFn fn = opcode_handlers[static_cast<int>(instruction.op)];        
-        for (auto& thread : warp.threads) {
-            if (!thread->active) continue;
-            fn(*thread, warp, globalMemory, instruction);
-            if (thread->active) thread->pc++;
-        }
-            
-
-    }
-};
-class GPU   
-{
-public:
-    std::vector<float> global_memory;
-    std::vector<SM> sms;
-    std::vector<std::shared_ptr<Thread>> all_threads;
-    std::vector<Instr> program;
-    
-    GPU(const std::vector<Instr> &program) : program(program), global_memory(GLOBAL_MEM_SIZE, 0.0f)
-    {
-        sms.emplace_back(0, global_memory);
-
-        for (int i = 0; i < NUM_THREADS; i++)
-        {
-            Thread t;
-            t.active = true;
-            all_threads.push_back(std::make_shared<Thread>(t));
-        }
-
-        for (int i = 0; i < NUM_THREADS; i += WARP_SIZE)
-        {
-            Warp new_warp;
-            for (int j = 0; j < WARP_SIZE && (i + j) < NUM_THREADS; j++)
+            if (ImGui::CollapsingHeader("Warp Memory", ImGuiTreeNodeFlags_DefaultOpen))
             {
-                new_warp.addThread(all_threads[i + j]);
-            }
-            sms[0].addWarp(new_warp);
-        }
-    }
-
-    void print_shared_mem(){
-        std::cout << "\n";
-        for(int i = 0; i<sms.size(); i++){
-            for(auto j : sms[i].warps){
-                j.wSharedMem();
-            }
-        }
-        std::cout << "\n";
-    }
-    void print_global_mem(){
-        for(const auto& m: this->global_memory){
-        std::cout << m << ", ";
-        }
-        std::cout << "\n";
-    }
-    std::optional<size_t> store(int value)
-    {
-
-        auto it = std::find(global_memory.begin(), global_memory.end(), 0);
-
-        if (it == global_memory.end())
-        {
-            return std::nullopt;
-        }
-
-        *it = value;
-        return std::distance(global_memory.begin(), it);
-    }
-
-    void run(){
-    
-        long long cycle_count = 0;
-        std::cout << "--- Simulation Starting ---" << std::endl;
-        while (true)
-        {
-            bool all_sms_finished = true;
-            for (auto &sm : sms)
-            {
-                sm.cycle(program);
-                for (const auto &warp : sm.warps)
+                for (size_t w = 0; w < gpu.sms[0].warps.size(); w++)
                 {
-                    if (!warp.isFinished())
+                    ImGui::SeparatorText(("Warp " + std::to_string(w)).c_str());
+                    if (ImGui::BeginTable(("WarpTable" + std::to_string(w)).c_str(), 2,
+                                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
                     {
-                        all_sms_finished = false;
+                        ImGui::TableSetupColumn("Address");
+                        ImGui::TableSetupColumn("Value");
+                        ImGui::TableHeadersRow();
+
+                        for (size_t addr = 0; addr < gpu.sms[0].warps[w].memory.size(); addr++)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("0x%04zx", addr);
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%f", gpu.sms[0].warps[w].memory[addr]);
+                        }
+                        ImGui::EndTable();
                     }
                 }
             }
 
-            if (all_sms_finished)
-                break;
-
-            cycle_count++;
-            if (cycle_count > 1000){
-                 std::cerr << "Simulation timed out!" << std::endl;
-                break;
-            }
+            ImGui::End();
         }
-        std::cout << "--- Simulation Finished in " << cycle_count << " cycles ---" << std::endl;
+
+        if (logs)
+        {
+            ImGui::SetNextWindowPos(ImVec2(10, 490), ImGuiCond_Once);
+            ImGui::SetNextWindowSize(ImVec2(860, 200), ImGuiCond_Once);
+
+            ImGui::Begin("Logs", &logs);
+            {
+                std::lock_guard<std::mutex> lock(consoleCapture.mtx);
+                ImGui::BeginChild("ScrollingRegion", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
+                ImGui::TextUnformatted(consoleCapture.log.c_str());
+
+                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+                    ImGui::SetScrollHereY(1.0f);
+
+                ImGui::EndChild();
+            }
+            ImGui::End();
+        }
+        float height = 70 + (gpu.all_threads.size() * ImGui::GetTextLineHeightWithSpacing());
+        ImGui::SetNextWindowPos(ImVec2(880, 30), ImGuiCond_Once);
+        ImGui::SetNextWindowSize(ImVec2(250, height), ImGuiCond_Once);
+
+        ImGui::Begin("Status");
+        ImGui::Text("Current Cycle: %i", gpu.get_cycle());
+        for (auto &thread : gpu.all_threads)
+        {
+            ImGui::Text("Thread %i status: %s", thread->id(), thread->active ? "active" : "inactive");
+        }
+        if (ImGui::Button("reset"))
+        {
+            gpu.reset();
+        }
+        ImGui::End();
+
+        gui.endFrame();
     }
-};
-
-int main()
-{
-    setup_opcode_handlers();   
-     std::vector<Instr> program = {
-    {Opcode::MOV, {"r0", 3.0f}},
-    {Opcode::HALT, {}}
-};
-
-    GPU gpu(program);
-   
-    gpu.run();
-    std::cout << "\n--- Final Register States ---" << std::endl;
-    
-    for (const auto& thread : gpu.all_threads) {
-        std::cout<< "\n";
-        thread->printRegisters();
-    }
-    std::cout<<std::endl;
-    std::cout << "\nGLOBAL MEMORY\n";
-    gpu.print_global_mem();
-    std::cout << "\nWarp/Shared MEMORY\n";
-    gpu.print_shared_mem();
-
+    gpu.stop();
+    return 0;
 }
