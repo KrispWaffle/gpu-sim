@@ -127,6 +127,7 @@ void GPU::run()
                     }
                 }
                 cycle_count++;
+                std::cout.flush(); 
                 
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
