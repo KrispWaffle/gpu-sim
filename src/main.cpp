@@ -50,7 +50,7 @@ int main()
         {Opcode::ADD, {"r0", "r0", 3.0f}},
         {Opcode::ADD, {"i", "i", 1.0f}},
         {Opcode::CMP_LT, {"i", "z"}},
-        {Opcode::JNZ, {"LOOP"}},
+        {Opcode::JMP, {"LOOP"}},
         {Opcode::HALT, {}}};
 
 
@@ -66,6 +66,15 @@ int main()
 
     GPU gpu(program);
 
+
+
+
+
+    /*
+    
+        GUI THINGS
+    
+    */
     GUI gui;
     bool threadView = true;
     bool memoryView = true;

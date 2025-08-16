@@ -4,7 +4,7 @@
 #include <variant>
 #include <optional>
 
-enum class Opcode { ADD, SUB, MUL, DIV, NEG, LD, ST, MOV, HALT, DEF, LABEL, JNZ,CMP_LT };
+enum class Opcode { ADD, SUB, MUL, DIV, NEG, LD, ST, MOV, HALT, DEF, LABEL, JMP,CMP_LT };
 enum class StoreLoc { GLOBAL, SHARED, LOCAL };
 enum class ErrorCode { None, GlobalOutOfBounds, SharedOutOfBounds, InvalidMemorySpace, DivByZero, StringReq, VarNotFound};
 enum class OpKind { Constant, Register, Variable, Global, Shared, Invalid };

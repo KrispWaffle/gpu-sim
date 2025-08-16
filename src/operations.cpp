@@ -20,7 +20,7 @@ void setup_opcode_handlers()
     opcode_handlers[static_cast<int>(Opcode::DEF)] = _def_;
     opcode_handlers[static_cast<int>(Opcode::LABEL)] = _label_;
     opcode_handlers[static_cast<int>(Opcode::CMP_LT)] = _cond_;
-    opcode_handlers[static_cast<int>(Opcode::JNZ)] = _jump_;
+    opcode_handlers[static_cast<int>(Opcode::JMP)] = _jump_;
 
 }
 
@@ -434,10 +434,10 @@ ErrorCode _cond_(Thread &t, Warp &warp, std::vector<float> &global, const Instr 
     }
     if(v1.value().value <v2.value().value){
         t.predicateReg = true;
-        std::cout  << "\nCOND FAILED CONTINUING LOOP\n";
+        std::cout  << "\n[T" << t.id()<< " COND FAILED CONTINUING LOOP\n";
     }else{
         t.predicateReg = false;
-        std::cout  << "\nEXITING LOOP\n";
+        std::cout  << "\n[T" << t.id()<< " EXITING LOOP\n";
 
     }
 
@@ -447,7 +447,6 @@ ErrorCode _cond_(Thread &t, Warp &warp, std::vector<float> &global, const Instr 
 ErrorCode _jump_(Thread &t, Warp &warp, std::vector<float> &global, const Instr &instr)
 {
 
-    std::cout << "JUMP\n";
     if (instr.src.empty()) {
         std::cerr << "JNZ error: no operands\n";
         return ErrorCode::InvalidMemorySpace;
@@ -465,7 +464,7 @@ ErrorCode _jump_(Thread &t, Warp &warp, std::vector<float> &global, const Instr 
 
     if(t.predicateReg){
         t.pc = static_cast<size_t>(labelPos.value()-1);
-        std::cout << "\nJUMPED TO " << labelPos.value()-1 << "\n";
+        std::cout << "\n[T" << t.id()<< "] JUMPED TO " << labelPos.value()-1 << "\n";
     }else{
         return ErrorCode::None;
     }
