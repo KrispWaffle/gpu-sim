@@ -5,7 +5,8 @@ LIBS = -lGL -lGLU -lglfw
 SRC = src/main.cpp \
       src/gpu.cpp \
       src/gui.cpp \
-      src/handlers.cpp \
+      src/operations.cpp \
+      src/labeltable.cpp \
       src/instruction.cpp \
       src/vartable.cpp \
       src/execution.cpp \
