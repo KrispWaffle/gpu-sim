@@ -55,6 +55,8 @@ OpInfo decodeOperand(const Operand &op, Thread &t) {
                 return {OpKind::Register, 0.0f, r, {}};
             }else if(r==-1){
                 return {OpKind::Register, 0.0f, tid, {}};
+            }else if(r >= 0 && r < NUM_REGISTERS){
+                return {OpKind::Register, 0.0f, r, {}};
             }
         }else if(s.size()>1 && s.substr(0,2) == "gm" ){
             int g = getMemoryLocation(s) ;

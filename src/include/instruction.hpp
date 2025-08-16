@@ -4,9 +4,9 @@
 #include <variant>
 #include <optional>
 
-enum class Opcode { ADD, SUB, MUL, DIV, NEG, LD, ST, MOV, HALT, DEF };
+enum class Opcode { ADD, SUB, MUL, DIV, NEG, LD, ST, MOV, HALT, DEF, LABEL, JNZ,CMP_LT };
 enum class StoreLoc { GLOBAL, SHARED, LOCAL };
-enum class ErrorCode { None, GlobalOutOfBounds, SharedOutOfBounds, InvalidMemorySpace, DivByZero };
+enum class ErrorCode { None, GlobalOutOfBounds, SharedOutOfBounds, InvalidMemorySpace, DivByZero, StringReq, VarNotFound};
 enum class OpKind { Constant, Register, Variable, Global, Shared, Invalid };
 
 struct Variable {
@@ -18,7 +18,7 @@ struct Variable {
     StoreLoc loc;
 };
 
-using Operand = std::variant<Opcode, std::string, float, Variable, StoreLoc>;
+using Operand = std::variant<Opcode, std::string, float, Variable, StoreLoc, int>;
 
 struct Instr {
     Opcode op;

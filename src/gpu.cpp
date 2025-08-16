@@ -1,11 +1,11 @@
 #include "gpu.hpp"
-#include "handlers.hpp"
+#include "operations.hpp"
 #include <iostream>
 #include <algorithm>
-
+#include "vartable.hpp"
 int Thread::_id = 0;
 
-Thread::Thread() : id_(_id++), pc(0), _registers(NUM_REGISTERS, 0.0f), active(true) {}
+Thread::Thread() : id_(_id++), pc(0), _registers(NUM_REGISTERS, 0.0f), active(true), predicateReg(0) {}
 void Thread::printRegisters() const {
     std::cout << "\nTHREAD: " << id_ << "\n";
     for (size_t x = 0; x < _registers.size(); x++) {
@@ -13,7 +13,7 @@ void Thread::printRegisters() const {
     }
 }
 void Thread::set_instruction(Instr instr) {
-    intruction = std::move(instr);
+    instruction = std::move(instr);
 }
 
 Warp::Warp() : id_(0), memory(GLOBAL_MEM_SIZE, 0.0f) {
@@ -49,7 +49,7 @@ void SM::cycle(const std::vector<Instr>& program) {
     for (auto& warp : warps) {
         if (warp.isFinished()) continue;
 
-        size_t shared_pc = 0;
+        shared_pc = 0;
         for (const auto& t : warp.threads) {
             if (t->active) {
                 shared_pc = t->pc;
@@ -108,9 +108,28 @@ void GPU::run()
                         }
                     }
                 }
+                for(auto& var:VarTable::getInstance().table){
+                    switch (var.second.loc)
+                    {
+                    case StoreLoc::GLOBAL:
+                        var.second.value = global_memory[var.second.offset];
+                        break;
+                    case StoreLoc::LOCAL:
+                        //Need to fix this 
+                        // var.second.value = all_threads[var.second.offset];
+                        break;
+                    case StoreLoc::SHARED:
+                        //temp solution
+                        var.second.value = this->sms[0].warps[0].memory[var.second.offset];
+                        break;
+                    default:
+                        break;
+                    }
+                }
                 cycle_count++;
+                
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10)); 
+            std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
         }
 
         finished = true;

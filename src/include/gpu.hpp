@@ -14,7 +14,8 @@ public:
     int id_;
     bool active;
     std::vector<float> _registers;
-    Instr intruction;
+    Instr instruction;
+    int predicateReg;
     Thread();
     int id() const { return id_; }
     void printRegisters() const;
@@ -37,6 +38,7 @@ public:
     int id;
     std::vector<Warp> warps;
     std::vector<float>& globalMemory;
+    size_t shared_pc;
     SM(int sm_id, std::vector<float>& memory);
     void addWarp(const Warp& warp);
     void cycle(const std::vector<Instr>& program);
