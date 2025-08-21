@@ -32,7 +32,7 @@ void Warp::addThread(std::shared_ptr<Thread> thread) {
     threads.push_back(thread);
 }
 
-void Warp::wSharedMem() const {
+void Warp::print_sharedMem() const {
     for (const auto& i : memory) {
         std::cout << i << ", ";
     }
@@ -126,11 +126,11 @@ void GPU::run()
                         break;
                     }
                 }
-                cycle_count++;
+            cycle_count++;
                 std::cout.flush(); 
                 
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
+            std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_TIME)); 
         }
 
         finished = true;
@@ -149,7 +149,7 @@ void GPU::print_shared_mem() const {
     std::cout << "\n";
     for (const auto& sm : sms) {
         for (const auto& warp : sm.warps) {
-            warp.wSharedMem();
+            warp.print_sharedMem();
         }
     }
     std::cout << "\n";

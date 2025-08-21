@@ -38,42 +38,28 @@ void stopConsoleCapture()
 int main()
 {
     setup_opcode_handlers();
-    
+
     std::vector<Instr> program = {
         // Define registers
 
         // END x = 30
+        {Opcode::ADD, {"r0", "r0", 1.0f}},
         {Opcode::DEF, {Variable{"x", 0.0f, 0, false, true, StoreLoc::SHARED}}},
-        {Opcode::DEF, {Variable{"i", 0.0f, 0, false, true,StoreLoc::GLOBAL }}},
-        {Opcode::DEF, {Variable{"z", 10.0f, 2 ,false , false, StoreLoc::LOCAL}}},
-        {Opcode::LABEL, {"LOOP",4}},
-        {Opcode::ADD, {"r0", "r0", 3.0f}},
+        {Opcode::DEF, {Variable{"i", 0.0f, 0, false, true, StoreLoc::GLOBAL}}},
+        {Opcode::DEF, {Variable{"z", 1000.0f, 2, false, false, StoreLoc::LOCAL}}},
+        {Opcode::LABEL, {"LOOP", 4}},
+        {Opcode::MUL, {"r0", "r0", 3.0f}},
         {Opcode::ADD, {"i", "i", 1.0f}},
         {Opcode::CMP_LT, {"i", "z"}},
         {Opcode::JMP, {"LOOP"}},
         {Opcode::HALT, {}}};
 
-
-         std::vector<Instr> test_program = {
-        // Define registers
-
-        // END x = 30
-        {Opcode::DEF, {Variable{"x", 0.0f, 0, false, true, StoreLoc::SHARED}}},
-        {Opcode::DEF, {Variable{"i", 0.0f, 0, false, true,StoreLoc::GLOBAL }}},
-        {Opcode::DEF, {Variable{"z", 10.0f, 2 ,false , false, StoreLoc::LOCAL}}},
-        {Opcode::ADD, {"i", "i", 1.0f}},
-        {Opcode::HALT, {}}};
-
     GPU gpu(program);
 
-
-
-
-
     /*
-    
+
         GUI THINGS
-    
+
     */
     GUI gui;
     bool threadView = true;
@@ -113,25 +99,25 @@ int main()
         if (vars)
         {
             ImGui::Begin("Vars", &vars);
-          
-                if (ImGui::BeginTable("VarTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
-                {
-                    ImGui::TableSetupColumn("Name");
-                    ImGui::TableSetupColumn("Value");
-                    ImGui::TableHeadersRow();
-                    const auto &table = VarTable::getInstance().table;
-                    for (const auto &pair : table)
-                    {
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::Text("%s", pair.first.c_str());
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%f", pair.second.value);
-                    }
 
-                    ImGui::EndTable();
+            if (ImGui::BeginTable("VarTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            {
+                ImGui::TableSetupColumn("Name");
+                ImGui::TableSetupColumn("Value");
+                ImGui::TableHeadersRow();
+                const auto &table = VarTable::getInstance().table;
+                for (const auto &pair : table)
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Text("%s", pair.first.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%f", pair.second.value);
                 }
-            
+
+                ImGui::EndTable();
+            }
+
             ImGui::End();
         }
         if (threadView)
@@ -249,12 +235,16 @@ int main()
             if (ImGui::BeginTabItem("Main"))
             {
                 ImGui::Text("Current Cycle: %i", gpu.get_cycle());
-                ImGui::Text("PC: %lu",gpu.sms[0].shared_pc );
+                ImGui::Text("PC: %lu", gpu.sms[0].shared_pc);
                 if (ImGui::Button("reset"))
                 {
                     gpu.reset();
                 }
-            
+                if(ImGui::Button("stop"))
+                {
+                    gpu.stop();
+                }
+
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Thread"))

@@ -30,7 +30,7 @@ public:
     Warp();
     bool isFinished() const;
     void addThread(std::shared_ptr<Thread> thread);
-    void wSharedMem() const;
+    void print_sharedMem() const;
 };
 
 class SM {

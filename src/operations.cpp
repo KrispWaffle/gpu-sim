@@ -434,10 +434,10 @@ ErrorCode _cond_(Thread &t, Warp &warp, std::vector<float> &global, const Instr 
     }
     if(v1.value().value <v2.value().value){
         t.predicateReg = true;
-        std::cout  << "\n[T" << t.id()<< " COND FAILED CONTINUING LOOP\n";
+        std::cout  << "\n[T" << t.id()<< "] COND FAILED CONTINUING LOOP\n";
     }else{
         t.predicateReg = false;
-        std::cout  << "\n[T" << t.id()<< " EXITING LOOP\n";
+        std::cout  << "\n[T" << t.id()<< "] EXITING LOOP\n";
 
     }
 
