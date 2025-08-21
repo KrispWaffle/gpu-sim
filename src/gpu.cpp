@@ -39,7 +39,7 @@ void Warp::print_sharedMem() const {
     std::cout << "\n";
 }
 
-SM::SM(int sm_id, std::vector<float>& memory) : id(sm_id), globalMemory(memory) {}
+SM::SM(int sm_id, std::vector<float>& memory) : id(sm_id), globalMemory(memory), shared_pc(0) {}
 
 void SM::addWarp(const Warp& warp) {
     warps.push_back(warp);

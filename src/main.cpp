@@ -46,7 +46,7 @@ int main()
         {Opcode::ADD, {"r0", "r0", 1.0f}},
         {Opcode::DEF, {Variable{"x", 0.0f, 0, false, true, StoreLoc::SHARED}}},
         {Opcode::DEF, {Variable{"i", 0.0f, 0, false, true, StoreLoc::GLOBAL}}},
-        {Opcode::DEF, {Variable{"z", 1000.0f, 2, false, false, StoreLoc::LOCAL}}},
+        {Opcode::DEF, {Variable{"z", 10.0f, 2, false, false, StoreLoc::LOCAL}}},
         {Opcode::LABEL, {"LOOP", 4}},
         {Opcode::MUL, {"r0", "r0", 3.0f}},
         {Opcode::ADD, {"i", "i", 1.0f}},
