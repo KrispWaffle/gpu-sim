@@ -1,5 +1,6 @@
 # Simulating GPU
-More of an NVIDIA GPU though
+More of an NVIDIA GPU 
+REQ: imgui (just add it in the root dir)
 
 ![GUI](gui.png)
 
