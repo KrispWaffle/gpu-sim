@@ -79,6 +79,9 @@ Finally the `JMP` which makes the program jump back to the position you set on t
 - SUB
 - MUL
 - NEG 
+- XOR 
+- AND 
+- OR
 - LD (load)
 - ST (store)
 - MOV 
@@ -86,6 +89,7 @@ Finally the `JMP` which makes the program jump back to the position you set on t
 - DEF (create variables)
 - JMP (jump)
 - CMP_LT (compare less than)
+
 
 # Extra
 You can print Global and Shared memory by using `print_global_mem` and `print_shared_mem` on your gpu object
