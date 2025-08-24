@@ -87,6 +87,10 @@ GPU::GPU(const std::vector<Instr>& program) : program(program), global_memory(GL
     }
 }
 
+GPU::~GPU() {
+    stop(); 
+}
+
 void GPU::run()
 {
     running = true;

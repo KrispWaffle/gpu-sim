@@ -60,6 +60,7 @@ public:
     std::atomic<bool> finished{false};
 
     GPU(const std::vector<Instr>& program);
+    ~GPU();
 
     void run();
 

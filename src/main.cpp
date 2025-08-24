@@ -54,7 +54,13 @@ int main()
         {Opcode::JMP, {"LOOP"}},
         {Opcode::HALT, {}}};
 
-    GPU gpu(program);
+    std::vector<Instr> program2 = {
+        {Opcode::DEF, {Variable{"p", 7.0f, 0, false, true, StoreLoc::SHARED}}},
+        {Opcode::DEF, {Variable{"i", 4.0f, 0, false, true, StoreLoc::GLOBAL}}},
+        {Opcode::OR, {"r1", "p", "i"}},
+        {Opcode::HALT, {}}
+    };
+    GPU gpu(program2);
 
     /*
 

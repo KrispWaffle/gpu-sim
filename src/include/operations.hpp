@@ -4,7 +4,7 @@
 #include <array>
 
 using HandlerFn = ErrorCode(*)(Thread&, Warp&, std::vector<float>&, const Instr&);
-extern std::array<HandlerFn, 13> opcode_handlers;
+extern std::array<HandlerFn, 16> opcode_handlers;
 
 void setup_opcode_handlers();
 
@@ -21,3 +21,6 @@ ErrorCode _def_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& 
 ErrorCode _label_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr);
 ErrorCode _cond_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr);
 ErrorCode _jump_(Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr);
+ErrorCode _and_ (Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr);
+ErrorCode _or_ (Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr);
+ErrorCode _xor_ (Thread& t, Warp& warp, std::vector<float>& global, const Instr& instr);

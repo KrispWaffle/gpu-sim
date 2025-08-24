@@ -35,6 +35,14 @@ float eval(const OpInfo& lhs, const OpInfo& rhs, Opcode op, const ExecutionConte
             return b;
         case Opcode::NEG:
             return b*-1;
+        case Opcode::XOR:
+       
+            return static_cast<float>(static_cast<int>(a) ^ static_cast<int>(b));
+        case Opcode::OR:
+            return static_cast<float>(static_cast<int>(a) | static_cast<int>(b));
+        case Opcode::AND:   
+            return static_cast<float>(static_cast<int>(a) & static_cast<int>(b));
+
         default:
             throw std::runtime_error("eval unsupported opcode");
     }

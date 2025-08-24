@@ -4,7 +4,7 @@
 #include "labeltable.hpp"
 #include <iostream>
 #include <algorithm>
-std::array<HandlerFn, 13> opcode_handlers;
+std::array<HandlerFn, 16> opcode_handlers;
 
 void setup_opcode_handlers()
 {
@@ -21,6 +21,9 @@ void setup_opcode_handlers()
     opcode_handlers[static_cast<int>(Opcode::LABEL)] = _label_;
     opcode_handlers[static_cast<int>(Opcode::CMP_LT)] = _cond_;
     opcode_handlers[static_cast<int>(Opcode::JMP)] = _jump_;
+    opcode_handlers[static_cast<int>(Opcode::AND)] = _and_;
+    opcode_handlers[static_cast<int>(Opcode::OR)] = _or_;
+    opcode_handlers[static_cast<int>(Opcode::XOR)] = _xor_;
 
 }
 
@@ -468,5 +471,65 @@ ErrorCode _jump_(Thread &t, Warp &warp, std::vector<float> &global, const Instr 
     }else{
         return ErrorCode::None;
     }
+    return ErrorCode::None;
+}
+
+ErrorCode _and_(Thread &t, Warp &warp, std::vector<float> &global, const Instr &instr)
+{
+    
+    ExecutionContext ctx{t, warp, global};
+    OpInfo a = decodeOperand(instr.src[1],t);
+    OpInfo b = decodeOperand(instr.src[2],t);
+    OpInfo dst = decodeOperand(instr.src[0],t);
+
+    
+    float result = eval(a, b, Opcode::AND, ctx);
+    ErrorCode err = storeInLocation(dst, result, ctx);
+    if (err != ErrorCode::None)
+        return err;
+
+    float val_a = fetch(a, ctx);
+    float val_b = fetch(b, ctx);
+    std::cout << "[T" << t.id() << "] " << val_a << " AND " << val_b << "\n";
+    return ErrorCode::None;
+    return ErrorCode::None;
+}
+
+ErrorCode _or_(Thread &t, Warp &warp, std::vector<float> &global, const Instr &instr)
+{
+    ExecutionContext ctx{t, warp, global};
+    OpInfo a = decodeOperand(instr.src[1],t);
+    OpInfo b = decodeOperand(instr.src[2],t);
+    OpInfo dst = decodeOperand(instr.src[0],t);
+
+    
+    float result = eval(a, b, Opcode::OR, ctx);
+    ErrorCode err = storeInLocation(dst, result, ctx);
+    if (err != ErrorCode::None)
+        return err;
+
+    float val_a = fetch(a, ctx);
+    float val_b = fetch(b, ctx);
+    std::cout << "[T" << t.id() << "] " << val_a << " OR " << val_b << "\n";
+    return ErrorCode::None;
+    return ErrorCode::None;
+}
+
+ErrorCode _xor_(Thread &t, Warp &warp, std::vector<float>& global, const Instr& instr)
+{
+    ExecutionContext ctx{t, warp, global};
+    OpInfo a = decodeOperand(instr.src[1],t);
+    OpInfo b = decodeOperand(instr.src[2],t);
+    OpInfo dst = decodeOperand(instr.src[0],t);
+
+    
+    float result = eval(a, b, Opcode::XOR, ctx);
+    ErrorCode err = storeInLocation(dst, result, ctx);
+    if (err != ErrorCode::None)
+        return err;
+
+    float val_a = fetch(a, ctx);
+    float val_b = fetch(b, ctx);
+    std::cout << "[T" << t.id() << "] " << val_a << " XOR " << val_b << "\n";
     return ErrorCode::None;
 }
