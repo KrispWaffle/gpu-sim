@@ -93,6 +93,8 @@ GPU::~GPU() {
 
 void GPU::run()
 {
+    stop();
+    if (worker.joinable()) worker.join();
     running = true;
     finished = false;
 
@@ -120,7 +122,7 @@ void GPU::run()
                         break;
                     case StoreLoc::LOCAL:
                         //Need to fix this 
-                        // var.second.value = all_threads[var.second.offset];
+                                        // var.second.value =   [var.s  econd.offset];
                         break;
                     case StoreLoc::SHARED:
                         //temp solution
@@ -131,7 +133,7 @@ void GPU::run()
                     }
                 }
             cycle_count++;
-                std::cout.flush(); 
+            std::cout.flush(); 
                 
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_TIME)); 
@@ -171,7 +173,14 @@ int GPU::get_cycle() const
 }
 
 void GPU::reset() {
+    stop();
+    finished = false;
+        std::lock_guard<std::mutex> lock(mtx);
+
     cycle_count = 0;
+    for(auto& sms: this->sms){
+        sms.shared_pc = 0;
+    }
     for (auto& t : all_threads) {
         t->pc = 0;
         t->active = true;
@@ -183,4 +192,7 @@ void GPU::reset() {
             std::fill(warp.memory.begin(), warp.memory.end(), 0.0f);
         }
     }
+    
+    VarTable::getInstance().table.clear();
+
 }

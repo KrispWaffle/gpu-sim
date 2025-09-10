@@ -490,7 +490,7 @@ ErrorCode _and_(Thread &t, Warp &warp, std::vector<float> &global, const Instr &
 
     float val_a = fetch(a, ctx);
     float val_b = fetch(b, ctx);
-    std::cout << "[T" << t.id() << "] " << val_a << " AND " << val_b << "\n";
+    std::cout << "\n[T" << t.id() << "] " << val_a << " AND " << val_b << "\n";
     return ErrorCode::None;
     return ErrorCode::None;
 }
@@ -510,7 +510,7 @@ ErrorCode _or_(Thread &t, Warp &warp, std::vector<float> &global, const Instr &i
 
     float val_a = fetch(a, ctx);
     float val_b = fetch(b, ctx);
-    std::cout << "[T" << t.id() << "] " << val_a << " OR " << val_b << "\n";
+    std::cout << "\n[T" << t.id() << "] " << val_a << " OR " << val_b << "\n";
     return ErrorCode::None;
     return ErrorCode::None;
 }
@@ -530,6 +530,6 @@ ErrorCode _xor_(Thread &t, Warp &warp, std::vector<float>& global, const Instr& 
 
     float val_a = fetch(a, ctx);
     float val_b = fetch(b, ctx);
-    std::cout << "[T" << t.id() << "] " << val_a << " XOR " << val_b << "\n";
+    std::cout << "\n[T" << t.id() << "] " << val_a << " XOR " << val_b << "\n";
     return ErrorCode::None;
 }

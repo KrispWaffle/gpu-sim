@@ -245,6 +245,7 @@ int main()
                 if (ImGui::Button("reset"))
                 {
                     gpu.reset();
+                    gpu.program = program;
                 }
                 if(ImGui::Button("stop"))
                 {
@@ -257,7 +258,7 @@ int main()
             {
                 for (auto &thread : gpu.all_threads)
                 {
-                    ImGui::Text("Thread %i status: %s", thread->id(), thread->active ? "active" : "inactive");
+                    ImGui::Text("Thread %i status: %s pc: %li", thread->id(), thread->active ? "active" : "inactive", thread->pc);
                 }
                 ImGui::EndTabItem();
             }
@@ -272,3 +273,4 @@ int main()
     gpu.stop();
     return 0;
 }
+
