@@ -94,7 +94,6 @@ GPU::~GPU() {
 void GPU::run()
 {
     stop();
-    if (worker.joinable()) worker.join();
     running = true;
     finished = false;
 
