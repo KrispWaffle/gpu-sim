@@ -120,8 +120,7 @@ void GPU::run()
                         var.second.value = global_memory[var.second.offset];
                         break;
                     case StoreLoc::LOCAL:
-                        //Need to fix this 
-                                        // var.second.value =   [var.s  econd.offset];
+                        var.second.value = this->all_threads[0]->_registers[var.second.offset];
                         break;
                     case StoreLoc::SHARED:
                         //temp solution
