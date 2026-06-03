@@ -106,10 +106,6 @@ Labels are declared as `name:` on their own line. They are resolved before execu
 
 ---
 
-## Execution model
-
-Each thread has its own **program counter** — threads are not lockstep. After a diverging `jmp` (where some threads jump and others don't), threads execute independently from different PCs.
-
 Constants in `src/include/config.hpp`:
 
 | Constant | Default | Meaning |
