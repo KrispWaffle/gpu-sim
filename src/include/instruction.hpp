@@ -6,7 +6,7 @@
 
 enum class Opcode { ADD, SUB, MUL, DIV, NEG, LD, ST, MOV, HALT, DEF, LABEL, JMP,CMP_LT, AND, OR, XOR };
 enum class StoreLoc { GLOBAL, SHARED, LOCAL };
-enum class ErrorCode { None, GlobalOutOfBounds, SharedOutOfBounds, InvalidMemorySpace, DivByZero, StringReq, VarNotFound};
+enum class ErrorCode { None, GlobalOutOfBounds, SharedOutOfBounds, InvalidMemorySpace, DivByZero, StringReq, VarNotFound, BadOperand};
 enum class OpKind { Constant, Register, Variable, Global, Shared, Invalid };
 
 struct Variable {
@@ -28,11 +28,12 @@ struct Instr {
 struct OpInfo {
     OpKind kind;
     float constVal;
-    int index;
+    size_t index;
     Variable var;
 };
 
-// parsing helpers
-int getRegisterName(std::string reg);
-int getMemoryLocation(std::string mem);
-OpInfo decodeOperand(const Operand &op, class Thread &t);
+struct ExecutionContext;
+
+int getRegisterName(const std::string& reg);
+int getMemoryLocation(const std::string& mem);
+OpInfo decodeOperand(const Operand& op, ExecutionContext& ctx);

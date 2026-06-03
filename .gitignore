@@ -1,4 +1,5 @@
 main
 /.vscode
 /imgui
+/build
 imgui.ini

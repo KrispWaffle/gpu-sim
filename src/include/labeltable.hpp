@@ -1,25 +1,23 @@
 #pragma once
 #include "instruction.hpp"
-#include <unordered_map>
-#include <algorithm> 
+#include <vector>
+#include <string>
+#include <optional>
 #include <mutex>
-struct Label{
+#include <algorithm>
+
+struct Label {
     std::string labelName;
     int pos;
-    bool done;
 };
-class labelTable {
-public:
 
-    labelTable(const labelTable&) = delete;
-    labelTable& operator=(const labelTable&) = delete;
-    static labelTable& getInstance();
+class LabelTable {
+public:
     void addLabel(const std::string& label, int pos);
-    std::optional<int> getLabel(const std::string& name);
+    std::optional<int> getLabel(const std::string& name) const;
+    void clear();
 
 private:
-    labelTable() {}
-     mutable std::mutex mtx_;
+    mutable std::mutex mtx_;
     std::vector<Label> labels;
-    
 };
