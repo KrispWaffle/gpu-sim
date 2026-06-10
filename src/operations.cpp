@@ -5,7 +5,7 @@
 #include <iostream>
 #include <string>
 
-std::array<HandlerFn, 16> opcode_handlers;
+std::array<HandlerFn, 24> opcode_handlers;
 
 void setup_opcode_handlers()
 {
@@ -18,13 +18,17 @@ void setup_opcode_handlers()
     opcode_handlers[static_cast<int>(Opcode::XOR)]    = _binary_;
     opcode_handlers[static_cast<int>(Opcode::NEG)]    = _neg_;
     opcode_handlers[static_cast<int>(Opcode::MOV)]    = _mov_;
-    opcode_handlers[static_cast<int>(Opcode::LD)]     = _ld_;
+    opcode_handlers[static_cast<int>(Opcode::LD)]     = _ld_; 
     opcode_handlers[static_cast<int>(Opcode::ST)]     = _st_;
     opcode_handlers[static_cast<int>(Opcode::HALT)]   = _halt_;
     opcode_handlers[static_cast<int>(Opcode::DEF)]    = _def_;
     opcode_handlers[static_cast<int>(Opcode::LABEL)]  = _label_;
     opcode_handlers[static_cast<int>(Opcode::CMP_LT)] = _cond_;
+    opcode_handlers[static_cast<int>(Opcode::CMP_EQ)] = _cond_;
+    opcode_handlers[static_cast<int>(Opcode::CMP_GT)] = _cond_;
     opcode_handlers[static_cast<int>(Opcode::JMP)]    = _jump_;
+    opcode_handlers[static_cast<int>(Opcode::JMPU)]   = _jump_;
+    opcode_handlers[static_cast<int>(Opcode::BAR)]    = _bar_;
 }
 
 static const char* opSymbol(Opcode op) {
@@ -156,7 +160,10 @@ ErrorCode _def_(ExecutionContext& ctx, const Instr& instr)
         return ErrorCode::BadOperand;
     }
 
-    int writeOffset = var.threadIDX ? ctx.thread.id() : var.offset;
+    int lane = ctx.thread.id() % (int)ctx.warp.memory.size();
+    int writeOffset = var.threadIDX
+        ? (var.loc == StoreLoc::GLOBAL ? ctx.thread.id() : lane)
+        : var.offset;
 
     if (!ctx.vars.has(var.name)) {
         ctx.vars.addVar(var);
@@ -200,13 +207,23 @@ ErrorCode _cond_(ExecutionContext& ctx, const Instr& instr)
     if (a.kind == OpKind::Invalid || b.kind == OpKind::Invalid)
         return ErrorCode::BadOperand;
 
-    if (fetch(a, ctx) < fetch(b, ctx)) {
+    float va = fetch(a, ctx);
+    float vb = fetch(b, ctx);
+    bool taken = instr.op == Opcode::CMP_EQ ? va == vb
+               : instr.op == Opcode::CMP_GT ? va >  vb
+               :                              va <  vb;
+    if (taken) {
         ctx.thread.predicateReg = 1;
         std::cout << "\n[T" << ctx.thread.id() << "] COND TRUE\n";
     } else {
         ctx.thread.predicateReg = 0;
         std::cout << "\n[T" << ctx.thread.id() << "] COND FALSE\n";
     }
+    return ErrorCode::None;
+}
+
+ErrorCode _bar_(ExecutionContext&, const Instr&)
+{
     return ErrorCode::None;
 }
 

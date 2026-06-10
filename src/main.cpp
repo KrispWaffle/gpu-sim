@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <cstdio>
+#include <set>
 
 class ConsoleCapture : public std::stringbuf
 {
@@ -56,11 +57,16 @@ static std::vector<std::string> listGsimFiles(const std::string& dir) {
     return out;
 }
 
-static std::string compileInto(GPU& gpu, const std::string& source) {
+static std::string compileInto(GPU& gpu, const std::string& source,
+                               std::vector<std::string>& loadedLines) {
     try {
-        Program p = parseProgram(source);
-    
+        Program p = parseProgram(source, gpu.cfg);
+
         gpu.loadProgram(std::move(p.instructions), std::move(p.labels));
+        loadedLines.clear();
+        std::istringstream in(source);
+        std::string line;
+        while (std::getline(in, line)) loadedLines.push_back(line);
         return "OK";
     } catch (const ParseError& e) {
         return std::string("Parse error: ") + e.what();
@@ -81,7 +87,8 @@ int main()
     }
     
     GPU gpu({});
-    std::string compileStatus = compileInto(gpu, initialSrc);
+    std::vector<std::string> loadedLines;
+    std::string compileStatus = compileInto(gpu, initialSrc, loadedLines);
 
     std::vector<char> editorBuf(EDITOR_CAPACITY, 0);
     std::snprintf(editorBuf.data(), editorBuf.size(), "%s", initialSrc.c_str());
@@ -90,11 +97,14 @@ int main()
     int selectedFile = 0;
 
     GUI gui;
+    SimConfig pendingCfg = gpu.cfg;
     bool threadView = true;
     bool memoryView = true;
     bool logs = true;
     bool editor = true;
     bool vars = false;
+    bool timeline = true;
+    bool programView = true;
 
     while (!gui.shouldClose())
     {
@@ -105,6 +115,8 @@ int main()
         bool doStop = false;
         bool doCompile = false;
         bool doOpen = false;
+        bool doConfigure = false;
+        bool doStep = false;
         {
         std::lock_guard<std::mutex> lock(gpu.mtx);
 
@@ -115,6 +127,9 @@ int main()
             if (ImGui::BeginMenu("Gpu"))
             {
                 if (ImGui::MenuItem("Run Program"))  doRun = true;
+                if (ImGui::MenuItem("Step"))         doStep = true;
+                if (ImGui::MenuItem(gpu.paused ? "Resume" : "Pause"))
+                    gpu.paused = !gpu.paused;
                 if (ImGui::MenuItem("Reset"))        doReset = true;
                 if (ImGui::MenuItem("Stop"))         doStop = true;
                 if(ImGui::MenuItem("Clear")) consoleCapture.log.clear();
@@ -127,6 +142,8 @@ int main()
                 ImGui::MenuItem("Memory Viewer", nullptr, &memoryView);
                 ImGui::MenuItem("Logs",          nullptr, &logs);
                 ImGui::MenuItem("Vars",          nullptr, &vars);
+                ImGui::MenuItem("Timeline",      nullptr, &timeline);
+                ImGui::MenuItem("Program",       nullptr, &programView);
                 ImGui::EndMenu();
             }
             ImGui::EndMainMenuBar();
@@ -196,24 +213,34 @@ int main()
             ImGui::SetNextWindowPos(ImVec2(10, 30), ImGuiCond_Once);
             ImGui::SetNextWindowSize(ImVec2(360, 450), ImGuiCond_Once);
             ImGui::Begin("Thread Viewer", &threadView);
-            for (auto& thread : gpu.all_threads)
+            for (auto& sm : gpu.sms)
             {
-                ImGui::SeparatorText(("Thread " + std::to_string(thread->id())).c_str());
-                if (ImGui::BeginTable(("Registers##" + std::to_string(thread->id())).c_str(), 2,
-                                      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                for (auto& warp : sm.warps)
                 {
-                    ImGui::TableSetupColumn("Register");
-                    ImGui::TableSetupColumn("Value");
-                    ImGui::TableHeadersRow();
-                    for (size_t j = 0; j < thread->_registers.size(); j++)
+                    std::string header = "SM " + std::to_string(sm.id) +
+                                         " / Warp " + std::to_string(warp.id_);
+                    if (!ImGui::CollapsingHeader(header.c_str()))
+                        continue;
+                    for (auto& thread : warp.threads)
                     {
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::Text("R%zu", j);
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%.6f", thread->_registers[j]);
+                        ImGui::SeparatorText(("Thread " + std::to_string(thread->id())).c_str());
+                        if (ImGui::BeginTable(("Registers##" + std::to_string(thread->id())).c_str(), 2,
+                                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                        {
+                            ImGui::TableSetupColumn("Register");
+                            ImGui::TableSetupColumn("Value");
+                            ImGui::TableHeadersRow();
+                            for (size_t j = 0; j < thread->_registers.size(); j++)
+                            {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::Text("R%zu", j);
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::Text("%.6f", thread->_registers[j]);
+                            }
+                            ImGui::EndTable();
+                        }
                     }
-                    ImGui::EndTable();
                 }
             }
             ImGui::End();
@@ -244,25 +271,139 @@ int main()
             }
             if (ImGui::CollapsingHeader("Warp Memory", ImGuiTreeNodeFlags_DefaultOpen))
             {
-                for (size_t w = 0; w < gpu.sms[0].warps.size(); w++)
+                for (auto& sm : gpu.sms)
                 {
-                    ImGui::SeparatorText(("Warp " + std::to_string(w)).c_str());
-                    if (ImGui::BeginTable(("WarpTable" + std::to_string(w)).c_str(), 2,
-                                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                    for (auto& warp : sm.warps)
                     {
-                        ImGui::TableSetupColumn("Address");
-                        ImGui::TableSetupColumn("Value");
-                        ImGui::TableHeadersRow();
-                        for (size_t addr = 0; addr < gpu.sms[0].warps[w].memory.size(); addr++)
+                        std::string label = "SM " + std::to_string(sm.id) +
+                                            " / Warp " + std::to_string(warp.id_);
+                        ImGui::SeparatorText(label.c_str());
+                        if (ImGui::BeginTable(("WarpTable" + std::to_string(warp.id_)).c_str(), 2,
+                                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
                         {
-                            ImGui::TableNextRow();
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::Text("0x%04zx", addr);
-                            ImGui::TableSetColumnIndex(1);
-                            ImGui::Text("%f", gpu.sms[0].warps[w].memory[addr]);
+                            ImGui::TableSetupColumn("Address");
+                            ImGui::TableSetupColumn("Value");
+                            ImGui::TableHeadersRow();
+                            for (size_t addr = 0; addr < warp.memory.size(); addr++)
+                            {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::Text("0x%04zx", addr);
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::Text("%f", warp.memory[addr]);
+                            }
+                            ImGui::EndTable();
                         }
-                        ImGui::EndTable();
                     }
+                }
+            }
+            ImGui::End();
+        }
+
+        if (timeline)
+        {
+            ImGui::SetNextWindowPos(ImVec2(10, 700), ImGuiCond_Once);
+            ImGui::SetNextWindowSize(ImVec2(1390, 320), ImGuiCond_Once);
+            ImGui::Begin("Timeline", &timeline);
+
+            static const ImU32 palette[] = {
+                IM_COL32(86, 180, 233, 255), IM_COL32(230, 159, 0, 255),
+                IM_COL32(0, 158, 115, 255),  IM_COL32(204, 121, 167, 255),
+                IM_COL32(240, 228, 66, 255), IM_COL32(213, 94, 0, 255),
+                IM_COL32(0, 114, 178, 255),  IM_COL32(155, 89, 182, 255),
+                IM_COL32(46, 204, 113, 255), IM_COL32(231, 76, 60, 255),
+                IM_COL32(26, 188, 156, 255), IM_COL32(241, 148, 138, 255),
+            };
+            constexpr int paletteN = (int)(sizeof(palette) / sizeof(palette[0]));
+            const ImU32 idleCol  = IM_COL32(60, 60, 60, 255);
+            const ImU32 stallCol = IM_COL32(35, 60, 150, 255);
+            const ImU32 barCol   = IM_COL32(210, 180, 40, 255);
+
+            ImGui::TextDisabled("rows: threads (grouped by warp) | columns: cycles | "
+                                "color: PC | gray: halted | blue: mem stall | yellow: barrier");
+            if (gpu.history.size() >= HISTORY_CAP)
+                ImGui::TextDisabled("history capped at %zu cycles", HISTORY_CAP);
+
+            const float cellW = 6.0f, cellH = 10.0f, warpGap = 6.0f;
+            const float labelW = 34.0f;
+            int warpSize = gpu.cfg.warpSize;
+            int numWarps = (gpu.cfg.numThreads + warpSize - 1) / warpSize;
+            float totalH = numWarps * (warpSize * cellH + warpGap);
+            float totalW = labelW + (float)gpu.history.size() * cellW;
+
+            ImGui::BeginChild("timeline_scroll", ImVec2(0, 0), true,
+                              ImGuiWindowFlags_HorizontalScrollbar);
+            ImVec2 origin = ImGui::GetCursorScreenPos();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            float scrollX = ImGui::GetScrollX();
+            float viewW = ImGui::GetWindowSize().x;
+
+            size_t c0 = (size_t)(scrollX > labelW ? (scrollX - labelW) / cellW : 0.0f);
+            size_t c1 = std::min(gpu.history.size(),
+                                 (size_t)((scrollX + viewW) / cellW) + 1);
+            for (size_t c = c0; c < c1; ++c)
+            {
+                const auto& rec = gpu.history[c];
+                float x0 = origin.x + labelW + (float)c * cellW;
+                for (size_t w = 0; w < rec.size(); ++w)
+                {
+                    int lanes = std::min(warpSize, gpu.cfg.numThreads - (int)w * warpSize);
+                    float wy = origin.y + (float)w * (warpSize * cellH + warpGap);
+                    for (int lane = 0; lane < lanes; ++lane)
+                    {
+                        ImU32 col = idleCol;
+                        for (const auto& s : rec[w].splinters)
+                        {
+                            if (!s.mask.test(lane)) continue;
+                            col = rec[w].stalled   ? stallCol
+                                : rec[w].atBarrier ? barCol
+                                : palette[s.pc % paletteN];
+                            break;
+                        }
+                        float y0 = wy + lane * cellH;
+                        dl->AddRectFilled(ImVec2(x0, y0),
+                                          ImVec2(x0 + cellW - 1.0f, y0 + cellH - 1.0f), col);
+                    }
+                }
+            }
+            for (int w = 0; w < numWarps; ++w)
+            {
+                float wy = origin.y + (float)w * (warpSize * cellH + warpGap);
+                dl->AddText(ImVec2(ImGui::GetWindowPos().x + 4.0f, wy),
+                            IM_COL32(200, 200, 200, 255), ("W" + std::to_string(w)).c_str());
+            }
+            ImGui::Dummy(ImVec2(std::max(totalW, 1.0f), std::max(totalH, 1.0f)));
+            if (gpu.running && !gpu.paused)
+                ImGui::SetScrollX(ImGui::GetScrollMaxX());
+            ImGui::EndChild();
+            ImGui::End();
+        }
+
+        if (programView)
+        {
+            ImGui::SetNextWindowPos(ImVec2(1410, 30), ImGuiCond_Once);
+            ImGui::SetNextWindowSize(ImVec2(420, 480), ImGuiCond_Once);
+            ImGui::Begin("Program", &programView);
+            std::set<int> activeLines;
+            for (auto& sm : gpu.sms)
+                for (auto& warp : sm.warps)
+                    for (auto& s : warp.splinters)
+                        if (s.pc < gpu.program.size())
+                            activeLines.insert(gpu.program[s.pc].ln);
+            for (size_t i = 0; i < loadedLines.size(); i++)
+            {
+                int ln = (int)i + 1;
+                char buf[512];
+                std::snprintf(buf, sizeof buf, "%3d| %s", ln, loadedLines[i].c_str());
+                if (activeLines.count(ln))
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.9f, 0.7f, 0.1f, 0.45f));
+                    ImGui::Selectable(buf, true);
+                    ImGui::PopStyleColor();
+                }
+                else
+                {
+                    ImGui::TextUnformatted(buf);
                 }
             }
             ImGui::End();
@@ -293,29 +434,59 @@ int main()
             if (ImGui::BeginTabItem("Main"))
             {
                 ImGui::Text("Cycle: %i", gpu.get_cycle());
-                ImGui::Text("State: %s", gpu.running ? "running"
-                                       : gpu.finished ? "finished" : "idle");
-                ImGui::Text("Last PC: %lu", gpu.sms[0].shared_pc);
+                ImGui::Text("State: %s", !gpu.running ? (gpu.finished ? "finished" : "idle")
+                                       : gpu.paused   ? "paused" : "running");
+                ImGui::Text("Instructions: %lld", gpu.stats.instructionsIssued);
+                double eff = gpu.stats.issueSlots > 0
+                    ? 100.0 * (double)gpu.stats.instructionsIssued / (double)gpu.stats.issueSlots
+                    : 0.0;
+                ImGui::Text("SIMD efficiency: %.1f%%", eff);
+                ImGui::Text("Divergences: %lld", gpu.stats.divergenceEvents);
+                ImGui::Text("Stall cycles: %lld", gpu.stats.stallCycles);
+
+                if (ImGui::Button("run"))   doRun = true;
+                ImGui::SameLine();
+                if (ImGui::Button("step"))  doStep = true;
+                ImGui::SameLine();
+                if (ImGui::Button(gpu.paused ? "resume" : "pause"))
+                    gpu.paused = !gpu.paused;
                 if (ImGui::Button("reset")) doReset = true;
                 ImGui::SameLine();
                 if (ImGui::Button("stop"))  doStop = true;
+
+                int d = gpu.delayMs.load();
+                ImGui::SetNextItemWidth(150);
+                if (ImGui::SliderInt("delay ms", &d, 0, 500))
+                    gpu.delayMs = d;
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Thread"))
             {
-                for (size_t idx = 0; idx < gpu.all_threads.size(); ++idx) {
-                    auto& thread = gpu.all_threads[idx];
-                    size_t warp_id = idx / WARP_SIZE;
-                    size_t wi      = idx % WARP_SIZE;
+                for (auto& thread : gpu.all_threads) {
+                    auto [smIdx, warpIdx, lane] = gpu.locateThread(thread->id());
                     std::string pc_str = "halted";
-                    if (!gpu.sms.empty() && warp_id < gpu.sms[0].warps.size()) {
-                        for (const auto& s : gpu.sms[0].warps[warp_id].splinters) {
-                            if (s.mask.test(wi)) { pc_str = std::to_string(s.pc); break; }
+                    if (smIdx < (int)gpu.sms.size() &&
+                        warpIdx < (int)gpu.sms[smIdx].warps.size()) {
+                        for (const auto& s : gpu.sms[smIdx].warps[warpIdx].splinters) {
+                            if (s.mask.test(lane)) { pc_str = std::to_string(s.pc); break; }
                         }
                     }
                     ImGui::Text("T%i %s pc=%s", thread->id(),
                                 thread->active ? "active" : "inactive", pc_str.c_str());
                 }
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Config"))
+            {
+                ImGui::InputInt("Threads",       &pendingCfg.numThreads);
+                ImGui::InputInt("Warp size",     &pendingCfg.warpSize);
+                ImGui::InputInt("SMs",           &pendingCfg.numSMs);
+                ImGui::InputInt("Registers",     &pendingCfg.numRegisters);
+                ImGui::InputInt("Global mem",    &pendingCfg.globalMemSize);
+                ImGui::InputInt("Gmem latency",  &pendingCfg.globalLatency);
+                if (ImGui::Button("Apply")) doConfigure = true;
+                ImGui::SameLine();
+                ImGui::TextDisabled("(rebuilds GPU, recompiles)");
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
@@ -325,19 +496,34 @@ int main()
         }  
         if (doStop)  gpu.stop();
         if (doReset) gpu.reset();
+        if (doConfigure) {
+            gpu.configure(pendingCfg);
+            pendingCfg = gpu.cfg;
+            compileStatus = compileInto(gpu, std::string(editorBuf.data()), loadedLines);
+        }
         if (doOpen && !programFiles.empty()) {
             std::string s = readFile(programFiles[selectedFile]);
             if (s.empty()) {
                 compileStatus = "Could not read " + programFiles[selectedFile];
             } else {
                 std::snprintf(editorBuf.data(), editorBuf.size(), "%s", s.c_str());
-                compileStatus = compileInto(gpu, s);
+                compileStatus = compileInto(gpu, s, loadedLines);
             }
         }
         if (doCompile) {
-            compileStatus = compileInto(gpu, std::string(editorBuf.data()));
+            compileStatus = compileInto(gpu, std::string(editorBuf.data()), loadedLines);
         }
         if (doRun) { startConsoleCapture(); gpu.run(); }
+        if (doStep) {
+            if (gpu.running) {
+                gpu.paused = true;
+                gpu.pendingSteps++;
+            } else {
+                startConsoleCapture();
+                gpu.run(/*startPaused=*/true);
+                gpu.pendingSteps = 1;
+            }
+        }
 
         gui.endFrame();
     }

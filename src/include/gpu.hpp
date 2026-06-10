@@ -11,9 +11,10 @@
 #include <unordered_map>
 #include <string>
 #include <bitset>
+#include <tuple>
 struct Splinter{
     size_t pc;
-    std::bitset<WARP_SIZE> mask;
+    std::bitset<MAX_WARP_SIZE> mask;
 };
 class Thread {
 public:
@@ -22,7 +23,7 @@ public:
     std::vector<float> _registers;
     Instr instruction;
     int predicateReg;
-    explicit Thread(int id);
+    Thread(int id, int numRegisters);
     int id() const { return id_; }
     void printRegisters() const;
     void set_instruction(Instr instr);
@@ -35,10 +36,27 @@ public:
     std::vector<Splinter> splinters;
     std::vector<std::shared_ptr<Thread>> threads;
     std::vector<float> memory;
-    Warp();
+    bool atBarrier = false;
+    int stallCycles = 0;
+    Warp(int id, int warpSize);
     bool isFinished() const;
     void addThread(std::shared_ptr<Thread> thread);
     void print_sharedMem() const;
+};
+
+// one warp's state during one cycle, for the Timeline panel
+struct WarpCycleRecord {
+    std::vector<Splinter> splinters;
+    bool stalled = false;
+    bool atBarrier = false;
+};
+constexpr size_t HISTORY_CAP = 8192;
+
+struct SimStats {
+    long long instructionsIssued = 0;  // lanes that actually executed an instruction
+    long long issueSlots = 0;          // warpSize per warp-issue (efficiency denominator)
+    long long divergenceEvents = 0;    // splinter splits at JMP
+    long long stallCycles = 0;         // warp-cycles lost to memory latency
 };
 
 class SM {
@@ -48,7 +66,8 @@ public:
     std::vector<float>& globalMemory;
     VarTable& vars;
     LabelTable& labels;
-    size_t shared_pc;
+    SimStats* stats = nullptr;
+    int globalLatency = 0;
     SM(int sm_id, std::vector<float>& memory, VarTable& vars, LabelTable& labels);
     void addWarp(const Warp& warp);
     void cycle(const std::vector<Instr>& program);
@@ -58,6 +77,7 @@ private:
 
 class GPU {
 public:
+    SimConfig cfg;
     std::vector<float> global_memory;
     VarTable vars;
     LabelTable labels;
@@ -67,17 +87,29 @@ public:
     std::unordered_map<std::string, int> initial_labels;
     long long cycle_count;
 
+    SimStats stats;
+    // history[cycle][global warp id] — Timeline panel data
+    std::vector<std::vector<WarpCycleRecord>> history;
+
     std::thread worker;
     std::mutex mtx;
     std::atomic<bool> running{false};
     std::atomic<bool> finished{false};
+    std::atomic<bool> paused{false};
+    std::atomic<int> pendingSteps{0};
+    std::atomic<int> delayMs{DELAY_TIME};
 
     GPU(const std::vector<Instr>& program);
     ~GPU();
 
-    void run();
+    void run(bool startPaused = false);
 
     void stop();
+
+    void configure(const SimConfig& config);
+
+    // (sm index, warp index within that SM, lane) for a global thread id
+    std::tuple<int, int, int> locateThread(int tid) const;
 
     void loadProgram(std::vector<Instr> instrs, std::unordered_map<std::string, int> labels_map);
 
@@ -85,4 +117,7 @@ public:
     void print_global_mem() const;
     int get_cycle() const;
     void reset();
+
+private:
+    void resetLocked();
 };

@@ -44,6 +44,11 @@ std::vector<std::string> tokenize(const std::string& line) {
     return toks;
 }
 
+bool allDigits(const std::string& s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(),
+        [](unsigned char c) { return std::isdigit(c); });
+}
+
 bool tryParseNumber(const std::string& s, float& out) {
     if (s.empty()) return false;
     size_t i = (s[0] == '-' || s[0] == '+') ? 1 : 0;
@@ -77,40 +82,84 @@ int parseRegOrOffset(const std::string& tok, int ln) {
     if (tok.empty()) throw ParseError(ln, "empty offset");
     std::string s = tok;
     if (s[0] == 'r' || s[0] == 'R') s = s.substr(1);
+    if (!allDigits(s)) throw ParseError(ln, "bad offset '" + tok + "'");
     try { return std::stoi(s); }
     catch (...) { throw ParseError(ln, "bad offset '" + tok + "'"); }
 }
 
-bool isOpcode(const std::string& tok) {
-    static const std::vector<std::string> ops = {
-        "add","sub","mul","div","neg","ld","st","mov",
-        "halt","jmp","cmp_lt","and","or","xor"
+struct OpSpec { Opcode op; size_t arity; };
+
+const std::unordered_map<std::string, OpSpec>& opcodeTable() {
+    static const std::unordered_map<std::string, OpSpec> table = {
+        {"add",    {Opcode::ADD,    3}},
+        {"sub",    {Opcode::SUB,    3}},
+        {"mul",    {Opcode::MUL,    3}},
+        {"div",    {Opcode::DIV,    3}},
+        {"and",    {Opcode::AND,    3}},
+        {"or",     {Opcode::OR,     3}},
+        {"xor",    {Opcode::XOR,    3}},
+        {"neg",    {Opcode::NEG,    2}},
+        {"ld",     {Opcode::LD,     2}},
+        {"st",     {Opcode::ST,     2}},
+        {"mov",    {Opcode::MOV,    2}},
+        {"cmp_lt", {Opcode::CMP_LT, 2}},
+        {"cmp_eq", {Opcode::CMP_EQ, 2}},
+        {"cmp_gt", {Opcode::CMP_GT, 2}},
+        {"jmp",    {Opcode::JMP,    1}},
+        {"jmpu",   {Opcode::JMPU,   1}},
+        {"bar",    {Opcode::BAR,    0}},
+        {"halt",   {Opcode::HALT,   0}},
     };
-    auto t = toLower(tok);
-    return std::find(ops.begin(), ops.end(), t) != ops.end();
+    return table;
 }
 
-Opcode parseOpcode(const std::string& tok, int ln) {
-    auto t = toLower(tok);
-    if (t == "add")    return Opcode::ADD;
-    if (t == "sub")    return Opcode::SUB;
-    if (t == "mul")    return Opcode::MUL;
-    if (t == "div")    return Opcode::DIV;
-    if (t == "neg")    return Opcode::NEG;
-    if (t == "ld")     return Opcode::LD;
-    if (t == "st")     return Opcode::ST;
-    if (t == "mov")    return Opcode::MOV;
-    if (t == "halt")   return Opcode::HALT;
-    if (t == "jmp")    return Opcode::JMP;
-    if (t == "cmp_lt") return Opcode::CMP_LT;
-    if (t == "and")    return Opcode::AND;
-    if (t == "or")     return Opcode::OR;
-    if (t == "xor")    return Opcode::XOR;
-    throw ParseError(ln, "unknown opcode '" + tok + "'");
+
+void checkIndex(const std::string& tok, size_t prefixLen, int limit,
+                const char* what, int ln) {
+    std::string num = tok.substr(prefixLen);
+    if (!allDigits(num)) return;
+    int idx = -1;
+    try { idx = std::stoi(num); } catch (...) {}
+    if (idx < 0 || idx >= limit)
+        throw ParseError(ln, std::string(what) + " index out of range in '" + tok
+                         + "' (max " + std::to_string(limit - 1) + ")");
+}
+
+// gm[x] / sm[x] — x is a register, variable, tidx, or literal index
+Operand parseMemRef(const std::string& tok, int ln, const SimConfig& cfg);
+
+void validateOperand(const std::string& tok, int ln, const SimConfig& cfg) {
+    if (tok.size() > 1 && tok[0] == 'r')
+        checkIndex(tok, 1, cfg.numRegisters, "register", ln);
+    else if (tok.size() > 2 && tok.compare(0, 2, "gm") == 0)
+        checkIndex(tok, 2, cfg.globalMemSize, "global memory", ln);
+    else if (tok.size() > 2 && tok.compare(0, 2, "sm") == 0)
+        checkIndex(tok, 2, cfg.warpSize, "shared memory", ln);
+}
+
+Operand parseMemRef(const std::string& tok, int ln, const SimConfig& cfg) {
+    auto open = tok.find('[');
+    if (open == std::string::npos || tok.size() < open + 3 || tok.back() != ']')
+        throw ParseError(ln, "malformed memory reference '" + tok + "'");
+    std::string prefix = toLower(tok.substr(0, open));
+    std::string inner = tok.substr(open + 1, tok.size() - open - 2);
+
+    StoreLoc space;
+    int limit;
+    const char* what;
+    if (prefix == "gm")      { space = StoreLoc::GLOBAL; limit = cfg.globalMemSize; what = "global memory"; }
+    else if (prefix == "sm") { space = StoreLoc::SHARED; limit = cfg.warpSize;      what = "shared memory"; }
+    else throw ParseError(ln, "memory reference must be gm[...] or sm[...], got '" + tok + "'");
+
+    if (allDigits(inner))
+        checkIndex(inner, 0, limit, what, ln);
+    else
+        validateOperand(inner, ln, cfg);
+    return MemRef{space, inner};
 }
 
 // def <loc> <name> = <value> [tidx] [@<regOrOffset>]
-Instr parseDef(const std::vector<std::string>& toks, int ln) {
+Instr parseDef(const std::vector<std::string>& toks, int ln, const SimConfig& cfg) {
     if (toks.size() < 5)
         throw ParseError(ln, "def <loc> <name> = <value> [tidx] [@rN]");
     StoreLoc loc = parseStoreLoc(toks[1], ln);
@@ -135,13 +184,19 @@ Instr parseDef(const std::vector<std::string>& toks, int ln) {
             throw ParseError(ln, "def: unexpected token '" + toks[i] + "'");
         }
     }
+    int limit = loc == StoreLoc::LOCAL  ? cfg.numRegisters
+              : loc == StoreLoc::SHARED ? cfg.warpSize
+              : cfg.globalMemSize;
+    if (offset >= limit)
+        throw ParseError(ln, "def: offset " + std::to_string(offset)
+                         + " out of range (max " + std::to_string(limit - 1) + ")");
     Variable v{name, val, offset, /*isConstant*/false, threadIdx, loc};
-    return Instr{Opcode::DEF, { v }};
+    return Instr{Opcode::DEF, { v }, ln};
 }
 
 }  // namespace
 
-Program parseProgram(const std::string& source) {
+Program parseProgram(const std::string& source, const SimConfig& cfg) {
     Program prog;
 
     struct Line {
@@ -164,7 +219,9 @@ Program parseProgram(const std::string& source) {
 
             if (toks.empty()) continue; 
             
-            if (toks.size() == 1 && toks[0].size() > 1 && toks[0].back() == ':') {
+            if (toks[0].size() > 1 && toks[0].back() == ':') {
+                if (toks.size() > 1)
+                    throw ParseError(ln, "label '" + toks[0] + "' must be on its own line");
                 std::string name = toks[0].substr(0, toks[0].size() - 1);
                 if (name.empty()) throw ParseError(ln, "empty label name");
                 lines.push_back({ln, {}, true, name});
@@ -191,22 +248,47 @@ Program parseProgram(const std::string& source) {
         auto head = toLower(toks[0]);
 
         if (head == "def") {
-            prog.instructions.push_back(parseDef(toks, pl.ln));
+            prog.instructions.push_back(parseDef(toks, pl.ln, cfg));
             continue;
         }
-        if (!isOpcode(toks[0]))
-            throw ParseError(pl.ln, "unknown opcode/keyword '" + toks[0] + "'");
 
-        Instr instr{parseOpcode(toks[0], pl.ln), {}};
-        for (size_t i = 1; i < toks.size(); i++)
-            instr.src.push_back(parseOperand(toks[i]));
+        auto it = opcodeTable().find(head);
+        if (it == opcodeTable().end())
+            throw ParseError(pl.ln, "unknown opcode/keyword '" + toks[0] + "'");
+        const OpSpec& spec = it->second;
+
+        if (toks.size() - 1 != spec.arity)
+            throw ParseError(pl.ln, "'" + head + "' expects "
+                             + std::to_string(spec.arity) + " operand(s), got "
+                             + std::to_string(toks.size() - 1));
+
+        Instr instr{spec.op, {}, pl.ln};
+        if (spec.op == Opcode::JMP || spec.op == Opcode::JMPU) {
+            float n;
+            if (tryParseNumber(toks[1], n))
+                throw ParseError(pl.ln, head + ": expected label name, got '" + toks[1] + "'");
+            if (!prog.labels.count(toks[1]))
+                throw ParseError(pl.ln, head + ": unknown label '" + toks[1] + "'");
+            instr.src.push_back(toks[1]);
+        } else {
+            for (size_t i = 1; i < toks.size(); i++) {
+                if (toks[i].find('[') != std::string::npos) {
+                    instr.src.push_back(parseMemRef(toks[i], pl.ln, cfg));
+                    continue;
+                }
+                Operand op = parseOperand(toks[i]);
+                if (std::holds_alternative<std::string>(op))
+                    validateOperand(toks[i], pl.ln, cfg);
+                instr.src.push_back(std::move(op));
+            }
+        }
         prog.instructions.push_back(instr);
     }
 
     return prog;
 }
-std::vector<std::string> tokenizerView(const std::string& source)
 
+std::vector<std::string> tokenizerView(const std::string& source)
 {
     return tokenize(source);
 }

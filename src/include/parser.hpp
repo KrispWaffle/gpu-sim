@@ -1,5 +1,6 @@
 #pragma once
 #include "instruction.hpp"
+#include "config.hpp"
 #include <vector>
 #include <unordered_map>
 #include <string>
@@ -16,6 +17,6 @@ struct Program {
     std::unordered_map<std::string, int> labels;
 };
 
-Program parseProgram(const std::string& source);
+Program parseProgram(const std::string& source, const SimConfig& cfg = SimConfig{});
 
 std::vector<std::string> tokenizerView(const std::string& source);

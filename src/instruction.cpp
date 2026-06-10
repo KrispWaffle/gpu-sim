@@ -3,6 +3,7 @@
 #include "gpu.hpp"
 #include <iostream>
 #include <cctype>
+#include <cstdlib>
 #include <stdexcept>
 
 int getRegisterName(const std::string& reg)
@@ -27,12 +28,35 @@ int getMemoryLocation(const std::string& mem){
 
 OpInfo decodeOperand(const Operand& op, ExecutionContext& ctx) {
     int tid = ctx.thread.id();
+    // lane within the warp: registers/shared mem are per-warp resources,
+    // global memory is indexed by the global thread id
+    int lane = tid % (int)ctx.warp.memory.size();
 
     if (auto pf = std::get_if<float>(&op)) {
         return { OpKind::Constant, *pf, 0, {} };
     }
     if (auto pi = std::get_if<int>(&op)) {
         return { OpKind::Constant, static_cast<float>(*pi), 0, {} };
+    }
+
+    if (auto pm = std::get_if<MemRef>(&op)) {
+        // resolve the index token (register/variable/tidx/literal) for this thread
+        const std::string& t = pm->idxTok;
+        char* end = nullptr;
+        float lit = std::strtof(t.c_str(), &end);
+        Operand inner;
+        if (end && end != t.c_str() && *end == '\0') inner = lit;
+        else                                         inner = t;
+        OpInfo idxInfo = decodeOperand(inner, ctx);
+        if (idxInfo.kind == OpKind::Invalid)
+            return { OpKind::Invalid, 0.0f, 0, {} };
+        int idx = (int)fetch(idxInfo, ctx);
+        size_t limit = pm->space == StoreLoc::GLOBAL ? ctx.globalMem.size()
+                                                     : ctx.warp.memory.size();
+        if (idx < 0 || (size_t)idx >= limit)
+            return { OpKind::Invalid, 0.0f, 0, {} };
+        OpKind kind = pm->space == StoreLoc::GLOBAL ? OpKind::Global : OpKind::Shared;
+        return { kind, 0.0f, static_cast<size_t>(idx), {} };
     }
 
     if (auto ps = std::get_if<std::string>(&op)) {
@@ -44,23 +68,29 @@ OpInfo decodeOperand(const Operand& op, ExecutionContext& ctx) {
 
         if (s.size() > 1 && s[0] == 'r') {
             int r = getRegisterName(s);
-            if (r == TIDX_RETURN_VAL)            return { OpKind::Register, 0.0f, static_cast<size_t>(tid), {} };
-            if (r >= 0 && r < NUM_REGISTERS)     return { OpKind::Register, 0.0f, static_cast<size_t>(r),   {} };
+            if (r == TIDX_RETURN_VAL) r = lane;
+            if (r >= 0 && r < (int)ctx.thread._registers.size())
+                return { OpKind::Register, 0.0f, static_cast<size_t>(r), {} };
+            if (r >= 0) return { OpKind::Invalid, 0.0f, 0, {} };
         }
         if (s.size() > 2 && s.substr(0,2) == "gm") {
             int g = getMemoryLocation(s);
-            if (g == TIDX_RETURN_VAL)            return { OpKind::Global, 0.0f, static_cast<size_t>(tid), {} };
-            if (g >= 0 && g < GLOBAL_MEM_SIZE)   return { OpKind::Global, 0.0f, static_cast<size_t>(g),   {} };
+            if (g == TIDX_RETURN_VAL) g = tid;
+            if (g >= 0 && g < (int)ctx.globalMem.size())
+                return { OpKind::Global, 0.0f, static_cast<size_t>(g), {} };
+            if (g >= 0) return { OpKind::Invalid, 0.0f, 0, {} };
         }
         if (s.size() > 2 && s.substr(0,2) == "sm") {
             int f = getMemoryLocation(s);
-            if (f == TIDX_RETURN_VAL)            return { OpKind::Shared, 0.0f, static_cast<size_t>(tid), {} };
-            if (f >= 0 && f < WARP_SIZE)         return { OpKind::Shared, 0.0f, static_cast<size_t>(f),   {} };
+            if (f == TIDX_RETURN_VAL) f = lane;
+            if (f >= 0 && f < (int)ctx.warp.memory.size())
+                return { OpKind::Shared, 0.0f, static_cast<size_t>(f), {} };
+            if (f >= 0) return { OpKind::Invalid, 0.0f, 0, {} };
         }
 
         if (auto ov = ctx.vars.getVar(s)) {
             Variable v = *ov;
-            int addr = v.threadIDX ? tid : v.offset;
+            int addr = v.threadIDX ? (v.loc == StoreLoc::GLOBAL ? tid : lane) : v.offset;
             return { OpKind::Variable, v.value, static_cast<size_t>(addr), std::move(v) };
         }
     }

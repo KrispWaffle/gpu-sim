@@ -4,7 +4,7 @@
 #include <array>
 
 using HandlerFn = ErrorCode(*)(ExecutionContext&, const Instr&);
-extern std::array<HandlerFn, 16> opcode_handlers;
+extern std::array<HandlerFn, 24> opcode_handlers;
 
 void setup_opcode_handlers();
 
@@ -18,3 +18,4 @@ ErrorCode _def_(ExecutionContext& ctx, const Instr& instr);
 ErrorCode _label_(ExecutionContext& ctx, const Instr& instr);
 ErrorCode _cond_(ExecutionContext& ctx, const Instr& instr);
 ErrorCode _jump_(ExecutionContext& ctx, const Instr& instr);
+ErrorCode _bar_(ExecutionContext& ctx, const Instr& instr);
