@@ -1,0 +1,22 @@
+; vector add: c[i] = a[i] + b[i] using indirect addressing
+; layout in global memory (default config: 32 threads, gm size 128):
+;   a = gm[0..31]    initialized to i
+;   b = gm[32..63]   initialized to 2*i
+;   c = gm[64..95]   result: 3*i
+;
+; each thread initializes and computes its own element; the barrier
+; makes the init visible before the adds (and shows up in the Timeline)
+
+    mov r0, tidx          ; i
+    st  gm[r0], tidx      ; a[i] = i
+    add r1, r0, 32.0
+    mul r2, tidx, 2.0
+    st  gm[r1], r2        ; b[i] = 2i
+    bar                   ; data ready
+
+    ld  r3, gm[r0]        ; a[i]
+    ld  r2, gm[r1]        ; b[i]
+    add r3, r3, r2
+    add r1, r0, 64.0
+    st  gm[r1], r3        ; c[i] = 3i
+    halt

@@ -4,10 +4,9 @@
 ; repeat until n = 1, count steps
 ;
 ; Even/odd check: (n AND 1) == 0 means even
-; Unconditional jump trick: cmp_lt 0.0, 1.0 always sets predicate=1
 ;
 ; Expected: 12->6->3->10->5->16->8->4->2->1  (9 steps)
-; All 10 threads run in parallel, each with their own n/steps slots
+; All threads run in parallel, each with their own n/steps slots
 
 def local  n      = 12 @ r0   ; n in register 0 (per-thread, no slot collision)
 def local  steps  = 0  @ r1   ; step counter in register 1
@@ -21,8 +20,7 @@ collatz:
     ; odd path: n = 3n + 1
     mul    n, n, 3.0
     add    n, n, 1.0
-    cmp_lt 0.0, 1.0           ; always true -> unconditional jump
-    jmp    step
+    jmpu   step
 
 even:
     div    n, n, 2.0          ; even path: n = n / 2
