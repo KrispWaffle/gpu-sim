@@ -28,8 +28,7 @@ int getMemoryLocation(const std::string& mem){
 
 OpInfo decodeOperand(const Operand& op, ExecutionContext& ctx) {
     int tid = ctx.thread.id();
-    // lane within the warp: registers/shared mem are per-warp resources,
-    // global memory is indexed by the global thread id
+   
     int lane = tid % (int)ctx.warp.memory.size();
 
     if (auto pf = std::get_if<float>(&op)) {
@@ -40,7 +39,6 @@ OpInfo decodeOperand(const Operand& op, ExecutionContext& ctx) {
     }
 
     if (auto pm = std::get_if<MemRef>(&op)) {
-        // resolve the index token (register/variable/tidx/literal) for this thread
         const std::string& t = pm->idxTok;
         char* end = nullptr;
         float lit = std::strtof(t.c_str(), &end);

@@ -44,7 +44,6 @@ public:
     void print_sharedMem() const;
 };
 
-// one warp's state during one cycle, for the Timeline panel
 struct WarpCycleRecord {
     std::vector<Splinter> splinters;
     bool stalled = false;
@@ -108,7 +107,6 @@ public:
 
     void configure(const SimConfig& config);
 
-    // (sm index, warp index within that SM, lane) for a global thread id
     std::tuple<int, int, int> locateThread(int tid) const;
 
     void loadProgram(std::vector<Instr> instrs, std::unordered_map<std::string, int> labels_map);
