@@ -5,30 +5,38 @@
 #include <iostream>
 #include <string>
 
-std::array<HandlerFn, 24> opcode_handlers;
+const std::array<HandlerFn, OPCODE_COUNT>& opcodeHandlers()
+{
+    static const std::array<HandlerFn, OPCODE_COUNT> handlers = [] {
+        std::array<HandlerFn, OPCODE_COUNT> table{};
+        table[static_cast<size_t>(Opcode::ADD)]    = _binary_;
+        table[static_cast<size_t>(Opcode::SUB)]    = _binary_;
+        table[static_cast<size_t>(Opcode::MUL)]    = _binary_;
+        table[static_cast<size_t>(Opcode::DIV)]    = _binary_;
+        table[static_cast<size_t>(Opcode::AND)]    = _binary_;
+        table[static_cast<size_t>(Opcode::OR)]     = _binary_;
+        table[static_cast<size_t>(Opcode::XOR)]    = _binary_;
+        table[static_cast<size_t>(Opcode::NEG)]    = _neg_;
+        table[static_cast<size_t>(Opcode::MOV)]    = _mov_;
+        table[static_cast<size_t>(Opcode::LD)]     = _ld_;
+        table[static_cast<size_t>(Opcode::ST)]     = _st_;
+        table[static_cast<size_t>(Opcode::HALT)]   = _halt_;
+        table[static_cast<size_t>(Opcode::DEF)]    = _def_;
+        table[static_cast<size_t>(Opcode::LABEL)]  = _label_;
+        table[static_cast<size_t>(Opcode::CMP_LT)] = _cond_;
+        table[static_cast<size_t>(Opcode::CMP_EQ)] = _cond_;
+        table[static_cast<size_t>(Opcode::CMP_GT)] = _cond_;
+        table[static_cast<size_t>(Opcode::JMP)]    = _jump_;
+        table[static_cast<size_t>(Opcode::JMPU)]   = _jump_;
+        table[static_cast<size_t>(Opcode::BAR)]    = _bar_;
+        return table;
+    }();
+    return handlers;
+}
 
 void setup_opcode_handlers()
 {
-    opcode_handlers[static_cast<int>(Opcode::ADD)]    = _binary_;
-    opcode_handlers[static_cast<int>(Opcode::SUB)]    = _binary_;
-    opcode_handlers[static_cast<int>(Opcode::MUL)]    = _binary_;
-    opcode_handlers[static_cast<int>(Opcode::DIV)]    = _binary_;
-    opcode_handlers[static_cast<int>(Opcode::AND)]    = _binary_;
-    opcode_handlers[static_cast<int>(Opcode::OR)]     = _binary_;
-    opcode_handlers[static_cast<int>(Opcode::XOR)]    = _binary_;
-    opcode_handlers[static_cast<int>(Opcode::NEG)]    = _neg_;
-    opcode_handlers[static_cast<int>(Opcode::MOV)]    = _mov_;
-    opcode_handlers[static_cast<int>(Opcode::LD)]     = _ld_; 
-    opcode_handlers[static_cast<int>(Opcode::ST)]     = _st_;
-    opcode_handlers[static_cast<int>(Opcode::HALT)]   = _halt_;
-    opcode_handlers[static_cast<int>(Opcode::DEF)]    = _def_;
-    opcode_handlers[static_cast<int>(Opcode::LABEL)]  = _label_;
-    opcode_handlers[static_cast<int>(Opcode::CMP_LT)] = _cond_;
-    opcode_handlers[static_cast<int>(Opcode::CMP_EQ)] = _cond_;
-    opcode_handlers[static_cast<int>(Opcode::CMP_GT)] = _cond_;
-    opcode_handlers[static_cast<int>(Opcode::JMP)]    = _jump_;
-    opcode_handlers[static_cast<int>(Opcode::JMPU)]   = _jump_;
-    opcode_handlers[static_cast<int>(Opcode::BAR)]    = _bar_;
+    (void)opcodeHandlers();
 }
 
 static const char* opSymbol(Opcode op) {
@@ -68,9 +76,10 @@ ErrorCode _binary_(ExecutionContext& ctx, const Instr& instr)
     ErrorCode err = storeInLocation(dst, result, ctx);
     if (err != ErrorCode::None) return err;
 
-    std::cout << "\n[T" << ctx.thread.id() << "] " << showOperand(lhs)
-              << " " << opSymbol(instr.op) << " " << showOperand(rhs)
-              << " -> " << showOperand(dst) << "\n";
+    if (ctx.logging)
+        std::cout << "\n[T" << ctx.thread.id() << "] " << showOperand(lhs)
+                  << " " << opSymbol(instr.op) << " " << showOperand(rhs)
+                  << " -> " << showOperand(dst) << "\n";
     return ErrorCode::None;
 }
 
@@ -86,8 +95,9 @@ ErrorCode _neg_(ExecutionContext& ctx, const Instr& instr)
     ErrorCode err = storeInLocation(dst, result, ctx);
     if (err != ErrorCode::None) return err;
 
-    std::cout << "\n[T" << ctx.thread.id() << "] NEG " << showOperand(src)
-              << " -> " << showOperand(dst) << "\n";
+    if (ctx.logging)
+        std::cout << "\n[T" << ctx.thread.id() << "] NEG " << showOperand(src)
+                  << " -> " << showOperand(dst) << "\n";
     return ErrorCode::None;
 }
 
@@ -103,8 +113,9 @@ ErrorCode _mov_(ExecutionContext& ctx, const Instr& instr)
     ErrorCode err = storeInLocation(dst, result, ctx);
     if (err != ErrorCode::None) return err;
 
-    std::cout << "\n[T" << ctx.thread.id() << "] MOV " << showOperand(src)
-              << " -> " << showOperand(dst) << "\n";
+    if (ctx.logging)
+        std::cout << "\n[T" << ctx.thread.id() << "] MOV " << showOperand(src)
+                  << " -> " << showOperand(dst) << "\n";
     return ErrorCode::None;
 }
 
@@ -120,8 +131,9 @@ ErrorCode _ld_(ExecutionContext& ctx, const Instr& instr)
     ErrorCode err = storeInLocation(dst, result, ctx);
     if (err != ErrorCode::None) return err;
 
-    std::cout << "\n[T" << ctx.thread.id() << "] LD " << showOperand(src)
-              << " -> " << showOperand(dst) << "\n";
+    if (ctx.logging)
+        std::cout << "\n[T" << ctx.thread.id() << "] LD " << showOperand(src)
+                  << " -> " << showOperand(dst) << "\n";
     return ErrorCode::None;
 }
 
@@ -137,15 +149,17 @@ ErrorCode _st_(ExecutionContext& ctx, const Instr& instr)
     ErrorCode err = storeInLocation(dst, result, ctx);
     if (err != ErrorCode::None) return err;
 
-    std::cout << "\n[T" << ctx.thread.id() << "] ST " << showOperand(src)
-              << " -> " << showOperand(dst) << "\n";
+    if (ctx.logging)
+        std::cout << "\n[T" << ctx.thread.id() << "] ST " << showOperand(src)
+                  << " -> " << showOperand(dst) << "\n";
     return ErrorCode::None;
 }
 
 ErrorCode _halt_(ExecutionContext& ctx, const Instr&)
 {
     ctx.thread.active = false;
-    std::cout << "\n[T" << ctx.thread.id() << "] HALT\n";
+    if (ctx.logging)
+        std::cout << "\n[T" << ctx.thread.id() << "] HALT\n";
     return ErrorCode::None;
 }
 
@@ -214,10 +228,12 @@ ErrorCode _cond_(ExecutionContext& ctx, const Instr& instr)
                :                              va <  vb;
     if (taken) {
         ctx.thread.predicateReg = 1;
-        std::cout << "\n[T" << ctx.thread.id() << "] COND TRUE\n";
+        if (ctx.logging)
+            std::cout << "\n[T" << ctx.thread.id() << "] COND TRUE\n";
     } else {
         ctx.thread.predicateReg = 0;
-        std::cout << "\n[T" << ctx.thread.id() << "] COND FALSE\n";
+        if (ctx.logging)
+            std::cout << "\n[T" << ctx.thread.id() << "] COND FALSE\n";
     }
     return ErrorCode::None;
 }

@@ -3,6 +3,15 @@
 #include "execution.hpp"
 #include <iostream>
 #include <algorithm>
+#include <stdexcept>
+
+namespace {
+class SimulationExecutionError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+}
+
 static const char *errorName(ErrorCode e)
 {
     switch (e)
@@ -73,7 +82,7 @@ void SM::addWarp(const Warp &warp)
     warps.push_back(warp);
 }
 
-void SM::cycle(const std::vector<Instr> &program)
+void SM::cycle(const std::vector<Instr> &program, bool logging)
 {
     for (auto &warp : warps)
     {
@@ -85,11 +94,11 @@ void SM::cycle(const std::vector<Instr> &program)
             if (stats) stats->stallCycles++;
             continue;
         }
-        execute(warp, program);
+        execute(warp, program, logging);
     }
 }
 
-// does this instruction read or write global memory?
+
 static bool touchesGlobal(const Instr &instr, const VarTable &vars)
 {
     if (instr.op == Opcode::DEF) return false;
@@ -117,12 +126,12 @@ void SM::execute(Warp& warp, const std::vector<Instr>& program) {
             continue;
         }
         const Instr& instruction = program[thread->pc];
-        HandlerFn fn = opcode_handlers[static_cast<int>(instruction.op)];
+        HandlerFn fn = opcodeHandlers[static_cast<int>(instruction.op)];
         ExecutionContext ctx{*thread, warp, globalMemory, vars, labels};
         ErrorCode err = fn(ctx, instruction);
         if (err != ErrorCode::None) {
             std::cout << "\n[T" << thread->id() << "] ERROR: " << errorName(err)
-                      << " — halting thread\n";
+                      << " â€” halting thread\n";
             thread->active = false;
         }
         if (thread->active) thread->pc++;
@@ -148,7 +157,7 @@ static void mergeSplinters(Warp &warp)
         }
     }
 }
-void SM::execute(Warp &warp, const std::vector<Instr> &program)
+void SM::execute(Warp &warp, const std::vector<Instr> &program, bool logging)
 {
     if (warp.splinters.empty())
     {
@@ -175,16 +184,35 @@ void SM::execute(Warp &warp, const std::vector<Instr> &program)
             if (!S.mask.test(t))
                 continue;
             Thread &th = *warp.threads[t];
-            ExecutionContext ctx{th, warp, globalMemory, vars, labels};
-            ErrorCode err = opcode_handlers[(int)instr.op](ctx, instr);
-            if (err != ErrorCode::None)
+            ExecutionContext ctx{th, warp, globalMemory, vars, labels, logging};
+            const auto& handlers = opcodeHandlers();
+            const size_t opcode = static_cast<size_t>(instr.op);
+            HandlerFn handler = opcode < handlers.size() ? handlers[opcode] : nullptr;
+            const std::string where = "line " + std::to_string(instr.ln) +
+                                      ", thread " + std::to_string(th.id()) + ": ";
+            if (!handler)
+                throw SimulationExecutionError(where + "missing opcode handler");
+            try
             {
-                std::cout << "[T" << th.id() << "] ERROR: " << errorName(err) << "\n";
-                S.mask.reset(t);
+                ErrorCode err = handler(ctx, instr);
+                if (err != ErrorCode::None)
+                    throw SimulationExecutionError(where + errorName(err));
+            }
+            catch (const SimulationExecutionError&)
+            {
+                throw;
+            }
+            catch (const std::exception& e)
+            {
+                throw SimulationExecutionError(where + e.what());
+            }
+            catch (...)
+            {
+                throw SimulationExecutionError(where + "unknown instruction error");
             }
         }
         if (globalLatency > 1 && touchesGlobal(instr, vars))
-            warp.stallCycles = globalLatency - 1;  
+            warp.stallCycles = globalLatency - 1;
     }
     if (instr.op == Opcode::HALT)
     {
@@ -193,21 +221,20 @@ void SM::execute(Warp &warp, const std::vector<Instr> &program)
     }
     else if (instr.op == Opcode::BAR)
     {
-        if (warp.splinters.size() > 1)
-            std::cout << "[W" << warp.id_ << "] WARNING: divergent barrier — "
+        if (logging && warp.splinters.size() > 1)
+            std::cout << "[W" << warp.id_ << "] WARNING: divergent barrier â€” "
                       << "some lanes already passed it\n";
-        warp.atBarrier = true; 
+        warp.atBarrier = true;
         return;
     }
     else if (instr.op == Opcode::JMP || instr.op == Opcode::JMPU)
     {
-        const std::string *name = std::get_if<std::string>(&instr.src[0]);
+        const std::string *name = instr.src.empty() ? nullptr : std::get_if<std::string>(&instr.src[0]);
+        if (!name)
+            throw SimulationExecutionError("line " + std::to_string(instr.ln) + ": BadOperand");
         auto target = labels.getLabel(*name);
-        if (!target)
-        {
-            S.pc++;
-            return;
-        }
+        if (!target || *target < 0 || static_cast<size_t>(*target) > program.size())
+            throw SimulationExecutionError("line " + std::to_string(instr.ln) + ": invalid jump target");
         size_t jump_pc = static_cast<size_t>(*target);
         size_t next_pc = S.pc + 1;
 
@@ -236,7 +263,7 @@ void SM::execute(Warp &warp, const std::vector<Instr> &program)
         else if (fallers.none())
         {
             S.pc = jump_pc;
-        } 
+        }
         else
         {
             if (stats) stats->divergenceEvents++;
@@ -284,7 +311,7 @@ void GPU::configure(const SimConfig &config)
         sms.back().globalLatency = cfg.globalLatency;
     }
 
-    int numWarps = (cfg.numThreads + cfg.warpSize - 1) / cfg.warpSize;
+    int numWarps = 1 + (cfg.numThreads - 1) / cfg.warpSize;
     for (int w = 0; w < numWarps; w++)
     {
         Warp new_warp(w, cfg.warpSize);
@@ -309,99 +336,220 @@ GPU::~GPU()
     stop();
 }
 
-void GPU::run(bool startPaused)
+bool GPU::allFinishedLocked() const
 {
-    reset();
-    running = true;
-    finished = false;
-    paused = startPaused;
+    for (const auto& sm : sms)
+        for (const auto& warp : sm.warps)
+            if (!warp.isFinished()) return false;
+    return true;
+}
 
-    worker = std::thread([this]()
-                         {
-        std::cout << "--- Simulation Starting ---"<< std::endl;
-        bool all_sms_finished = false;
+void GPU::recordHistoryLocked()
+{
+    if (history.size() >= HISTORY_CAP) return;
+    int numWarps = 1 + (cfg.numThreads - 1) / cfg.warpSize;
+    std::vector<WarpCycleRecord> rec(numWarps);
+    for (const auto& sm : sms)
+        for (const auto& warp : sm.warps)
+            rec[warp.id_] = {warp.splinters, warp.stallCycles > 0, warp.atBarrier};
+    history.push_back(std::move(rec));
+}
 
-        while (running && !all_sms_finished) {
-            if (paused && pendingSteps.load() == 0) {
+void GPU::releaseBarriersLocked()
+{
+    bool anyAtBar = false, allAtBar = true;
+    for (const auto& sm : sms)
+        for (const auto& warp : sm.warps)
+        {
+            if (warp.isFinished()) continue;
+            if (warp.atBarrier) anyAtBar = true;
+            else allAtBar = false;
+        }
+    if (!anyAtBar || !allAtBar) return;
+
+    for (auto& sm : sms)
+        for (auto& warp : sm.warps)
+        {
+            if (warp.isFinished() || !warp.atBarrier) continue;
+            warp.atBarrier = false;
+            auto it = std::min_element(
+                warp.splinters.begin(), warp.splinters.end(),
+                [](const Splinter& a, const Splinter& b) { return a.pc < b.pc; });
+            it->pc++;
+            mergeSplinters(warp);
+        }
+}
+
+void GPU::refreshVariablesLocked()
+{
+    for (auto& var : vars.table)
+    {
+        int off = var.second.threadIDX ? 0 : var.second.offset;
+        switch (var.second.loc)
+        {
+        case StoreLoc::GLOBAL:
+            if (off >= 0 && off < (int)global_memory.size())
+                var.second.value = global_memory[off];
+            break;
+        case StoreLoc::LOCAL:
+            if (!all_threads.empty() && off >= 0 && off < (int)all_threads[0]->_registers.size())
+                var.second.value = all_threads[0]->_registers[off];
+            break;
+        case StoreLoc::SHARED:
+            if (!sms.empty() && !sms[0].warps.empty() &&
+                off >= 0 && off < (int)sms[0].warps[0].memory.size())
+                var.second.value = sms[0].warps[0].memory[off];
+            break;
+        }
+    }
+}
+
+SimulationResult GPU::execute(const SimulationOptions& options) noexcept
+{
+    SimulationResult result;
+    try
+    {
+        if (options.logging)
+            std::cout << "--- Simulation Starting ---" << std::endl;
+
+        while (running.load())
+        {
+            if (options.interactive && paused.load() && pendingSteps.load() == 0)
+            {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
             }
-            bool stepping = pendingSteps.load() > 0;
-            all_sms_finished = true;
+
+            bool stepping = options.interactive && pendingSteps.load() > 0;
+            bool complete = false;
             {
                 std::lock_guard<std::mutex> lock(mtx);
-                if (history.size() < HISTORY_CAP) {
-                    int numWarps = (cfg.numThreads + cfg.warpSize - 1) / cfg.warpSize;
-                    std::vector<WarpCycleRecord> rec(numWarps);
-                    for (auto& sm : sms)
-                        for (auto& warp : sm.warps)
-                            rec[warp.id_] = {warp.splinters, warp.stallCycles > 0, warp.atBarrier};
-                    history.push_back(std::move(rec));
-                }
-                for (auto& sm : sms) {
-                    sm.cycle(program);
-                    for (const auto& warp : sm.warps) {
-                        if (!warp.isFinished()) {
-                            all_sms_finished = false;
-                        }
-                    }
-                }
-                // device-wide barrier: release once every unfinished warp has arrived
+                for (auto& sm : sms)
+                    for (auto& warp : sm.warps)
+                        std::erase_if(warp.splinters, [this](const Splinter& s) {
+                            return s.pc >= program.size();
+                        });
+                if (allFinishedLocked()) break;
+                if (options.maxCycles > 0 && cycle_count >= options.maxCycles)
                 {
-                    bool anyAtBar = false, allAtBar = true;
-                    for (auto& sm : sms)
-                        for (auto& warp : sm.warps) {
-                            if (warp.isFinished()) continue;
-                            if (warp.atBarrier) anyAtBar = true;
-                            else allAtBar = false;
-                        }
-                    if (anyAtBar && allAtBar) {
-                        for (auto& sm : sms)
-                            for (auto& warp : sm.warps) {
-                                if (warp.isFinished() || !warp.atBarrier) continue;
-                                warp.atBarrier = false;
-                                auto it = std::min_element(
-                                    warp.splinters.begin(), warp.splinters.end(),
-                                    [](const Splinter& a, const Splinter& b)
-                                    { return a.pc < b.pc; });
-                                it->pc++;
-                                mergeSplinters(warp);
-                            }
-                    }
+                    result.status = SimulationStatus::CycleLimit;
+                    result.cycles = cycle_count;
+                    result.diagnostic = "cycle limit reached (" + std::to_string(options.maxCycles) + ")";
+                    break;
                 }
-                for(auto& var : vars.table){
-                    int off = var.second.threadIDX ? 0 : var.second.offset;
-                    switch (var.second.loc)
-                    {
-                    case StoreLoc::GLOBAL:
-                        if (off >= 0 && off < (int)global_memory.size())
-                            var.second.value = global_memory[off];
-                        break;
-                    case StoreLoc::LOCAL:
-                        if (!all_threads.empty() && off >= 0 && off < (int)all_threads[0]->_registers.size())
-                            var.second.value = all_threads[0]->_registers[off];
-                        break;
-                    case StoreLoc::SHARED:
-                        if (!sms.empty() && !sms[0].warps.empty() &&
-                            off >= 0 && off < (int)sms[0].warps[0].memory.size())
-                            var.second.value = sms[0].warps[0].memory[off];
-                        break;
-                    default:
-                        break;
-                    }
-                }
-            cycle_count++;
-            std::cout.flush();
-
+                if (options.captureHistory) recordHistoryLocked();
+                for (auto& sm : sms) sm.cycle(program, options.logging);
+                releaseBarriersLocked();
+                refreshVariablesLocked();
+                cycle_count++;
+                for (auto& sm : sms)
+                    for (auto& warp : sm.warps)
+                        std::erase_if(warp.splinters, [this](const Splinter& s) {
+                            return s.pc >= program.size();
+                        });
+                complete = allFinishedLocked();
+                result.cycles = cycle_count;
             }
+
+            if (options.logging) std::cout.flush();
             if (stepping)
-                pendingSteps--;
-            else
+                pendingSteps.fetch_sub(1);
+            else if (options.interactive && !complete)
                 std::this_thread::sleep_for(std::chrono::milliseconds(delayMs.load()));
+
+            if (complete) break;
         }
 
+        std::lock_guard<std::mutex> lock(mtx);
+        if (!running.load() && !allFinishedLocked())
+        {
+            result.status = SimulationStatus::Stopped;
+            result.diagnostic = "simulation stopped";
+        }
+        if (options.logging)
+            std::cout << "\n--- Simulation Finished in " << cycle_count << " cycles ---" << std::endl;
+    }
+    catch (const SimulationExecutionError& e)
+    {
+        result.status = SimulationStatus::ExecutionError;
+        result.diagnostic = e.what();
+    }
+    catch (const std::exception& e)
+    {
+        result.status = SimulationStatus::InternalError;
+        result.diagnostic = e.what();
+    }
+    catch (...)
+    {
+        result.status = SimulationStatus::InternalError;
+        result.diagnostic = "unknown simulation error";
+    }
+
+    if (options.logging && (result.status == SimulationStatus::ExecutionError ||
+                            result.status == SimulationStatus::InternalError))
+        std::cout << "ERROR: " << result.diagnostic << std::endl;
+
+    result.cycles = cycle_count;
+    return result;
+}
+
+void GPU::run(bool startPaused, bool doReset)
+{
+    stop();
+    if (doReset)
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        resetLocked();
+    }
+    running = true;
+    finished = false;
+    paused = startPaused;
+    pendingSteps = 0;
+
+    SimulationOptions options;
+    try
+    {
+        worker = std::thread([this, options]() {
+            SimulationResult result = execute(options);
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                lastRunResult = std::move(result);
+            }
+            running = false;
+            finished = true;
+        });
+    }
+    catch (...)
+    {
+        running = false;
         finished = true;
-        std::cout << "\n--- Simulation Finished in " << cycle_count << " cycles ---"<< std::endl; });
+        throw;
+    }
+}
+
+SimulationResult GPU::runSynchronous(const SimulationOptions& options, bool doReset)
+{
+    stop();
+    if (doReset)
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        resetLocked();
+    }
+    running = true;
+    finished = false;
+    paused = false;
+
+    SimulationOptions synchronousOptions = options;
+    synchronousOptions.interactive = false;
+    pendingSteps = 0;
+    SimulationResult result = execute(synchronousOptions);
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        lastRunResult = result;
+    }
+    running = false;
+    finished = true;
+    return result;
 }
 
 void GPU::stop()
@@ -454,6 +602,7 @@ void GPU::resetLocked()
     for (auto &t : all_threads)
     {
         t->active = true;
+        t->predicateReg = 0;
         std::fill(t->_registers.begin(), t->_registers.end(), 0.0f);
     }
     std::fill(global_memory.begin(), global_memory.end(), 0.0f);

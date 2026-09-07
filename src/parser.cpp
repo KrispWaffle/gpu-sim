@@ -3,6 +3,8 @@
 #include <sstream>
 #include <cctype>
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 
 namespace{
 
@@ -51,17 +53,10 @@ bool allDigits(const std::string& s) {
 
 bool tryParseNumber(const std::string& s, float& out) {
     if (s.empty()) return false;
-    size_t i = (s[0] == '-' || s[0] == '+') ? 1 : 0;
-    if (i >= s.size()) return false;
-    bool hasDigit = false, hasDot = false;
-    for (; i < s.size(); i++) {
-        if (std::isdigit((unsigned char)s[i])) hasDigit = true;
-        else if (s[i] == '.' && !hasDot) hasDot = true;
-        else return false;
-    }
-    if (!hasDigit) return false;
-    try { out = std::stof(s); return true; }
-    catch (...) { return false; }
+    char* end = nullptr;
+    errno = 0;
+    out = std::strtof(s.c_str(), &end);
+    return end != s.c_str() && end == s.c_str() + s.size() && errno != ERANGE;
 }
 
 Operand parseOperand(const std::string& tok) {

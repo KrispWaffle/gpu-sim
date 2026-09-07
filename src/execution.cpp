@@ -5,14 +5,14 @@
 float fetch(const OpInfo& o, const ExecutionContext& ctx) {
     switch (o.kind) {
         case OpKind::Constant: return o.constVal;
-        case OpKind::Register: return ctx.thread._registers[o.index];
-        case OpKind::Global:   return ctx.globalMem[o.index];
-        case OpKind::Shared:   return ctx.warp.memory[o.index];
+        case OpKind::Register: return ctx.thread._registers.at(o.index);
+        case OpKind::Global:   return ctx.globalMem.at(o.index);
+        case OpKind::Shared:   return ctx.warp.memory.at(o.index);
         case OpKind::Variable:
             switch (o.var.loc) {
-                case StoreLoc::GLOBAL: return ctx.globalMem[o.index];
-                case StoreLoc::SHARED: return ctx.warp.memory[o.index];
-                case StoreLoc::LOCAL:  return ctx.thread._registers[o.index];
+                case StoreLoc::GLOBAL: return ctx.globalMem.at(o.index);
+                case StoreLoc::SHARED: return ctx.warp.memory.at(o.index);
+                case StoreLoc::LOCAL:  return ctx.thread._registers.at(o.index);
             }
             throw std::runtime_error("fetch: variable has invalid StoreLoc");
         case OpKind::Invalid:

@@ -8,6 +8,7 @@ struct ExecutionContext {
     std::vector<float>& globalMem;
     VarTable& vars;
     LabelTable& labels;
+    bool logging = true;
 };
 
 float fetch(const OpInfo& o, const ExecutionContext& ctx);

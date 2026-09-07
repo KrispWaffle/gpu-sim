@@ -3,3 +3,11 @@ main
 /imgui
 /build
 imgui.ini
+
+# Local verification and generated binaries
+/.review-gsim/
+*.so
+__pycache__/
+*.py[cod]
+.pytest_cache/
+/tinygrad/

@@ -58,6 +58,29 @@ struct SimStats {
     long long stallCycles = 0;         // warp-cycles lost to memory latency
 };
 
+enum class SimulationStatus {
+    Completed,
+    Stopped,
+    CycleLimit,
+    ExecutionError,
+    InternalError,
+};
+
+struct SimulationResult {
+    SimulationStatus status = SimulationStatus::Completed;
+    long long cycles = 0;
+    std::string diagnostic;
+
+    bool ok() const { return status == SimulationStatus::Completed; }
+};
+
+struct SimulationOptions {
+    long long maxCycles = 0;
+    bool captureHistory = true;
+    bool logging = true;
+    bool interactive = true;
+};
+
 class SM {
 public:
     int id;
@@ -69,9 +92,9 @@ public:
     int globalLatency = 0;
     SM(int sm_id, std::vector<float>& memory, VarTable& vars, LabelTable& labels);
     void addWarp(const Warp& warp);
-    void cycle(const std::vector<Instr>& program);
+    void cycle(const std::vector<Instr>& program, bool logging);
 private:
-    void execute(Warp& warp, const std::vector<Instr>& program);
+    void execute(Warp& warp, const std::vector<Instr>& program, bool logging);
 };
 
 class GPU {
@@ -97,11 +120,13 @@ public:
     std::atomic<bool> paused{false};
     std::atomic<int> pendingSteps{0};
     std::atomic<int> delayMs{DELAY_TIME};
+    SimulationResult lastRunResult;
 
     GPU(const std::vector<Instr>& program);
     ~GPU();
 
-    void run(bool startPaused = false);
+    void run(bool startPaused = false, bool doReset = true);
+    SimulationResult runSynchronous(const SimulationOptions& options = {}, bool doReset = true);
 
     void stop();
 
@@ -117,5 +142,10 @@ public:
     void reset();
 
 private:
+    SimulationResult execute(const SimulationOptions& options) noexcept;
+    bool allFinishedLocked() const;
+    void recordHistoryLocked();
+    void releaseBarriersLocked();
+    void refreshVariablesLocked();
     void resetLocked();
 };

@@ -98,3 +98,63 @@ gpu.print_global_mem();
 gpu.print_shared_mem();
 ```
 !Output is now directed towards the log window in the GUI!
+
+## Experimental tinygrad backend (Linux / WSL)
+
+The local `tinygrad/` checkout supplies tinygrad; the integration is
+`tinygrad/tinygrad/runtime/ops_gsim.py`. Tests explicitly select GSIM and use this
+checkout, not an installed pip package. The tested checkout reports commit
+`b99b9e187557a3eee7fa1f236e7f3a6c19125404` (an observed local revision, not a
+new remote pin). Python 3.12 in Ubuntu/WSL was used.
+
+Build and test from this repository root in Linux (Windows: enter with
+`wsl -d Ubuntu --cd /mnt/d/gpu`):
+
+```sh
+mkdir -p .review-gsim
+g++ -std=c++20 -Isrc/include -fPIC -shared -pthread \
+  src/gsim_capi.cpp src/gpu.cpp src/operations.cpp src/labeltable.cpp \
+  src/instruction.cpp src/vartable.cpp src/execution.cpp src/parser.cpp \
+  -o .review-gsim/libgsim-python.so
+PYTHONDONTWRITEBYTECODE=1 CACHELEVEL=0 DEV=GSIM \
+  GSIM_LIB="$PWD/.review-gsim/libgsim-python.so" python3 test/test_gsim.py
+```
+
+The suite has 21 tests covering arithmetic, reductions/matmul, constants down to
+float32 subnormals, branch selection with NaN/infinity, padding, dtype/cast and
+runtime rejection contracts, changed-input program reuse, and both `NOLOCALS=0`
+and `NOLOCALS=1` launches. The native headless call is synchronous and quiet;
+Python does not redirect process-wide stdout.
+
+### Supported contract
+
+- Shaped global **float32 buffers only**. Integer and boolean intermediates are
+  for indexing/comparisons, not integer/bool tensor storage. Float16/64 and
+  other tensor dtypes are rejected when compiling computation.
+- Integer intermediates must have provable bounds within +/-2^24; total packed
+  memory and thread count are capped at 2^24 for exact float32 addressing.
+- Identity casts, bounded index-int/bool to float32, and float32 to bool are
+  supported. Float-to-int conversion and non-identity bitcasts are rejected.
+- Static `gidx*`, `lidx*`, and no-local `idx*` axes are supported. Dynamic scalar
+  parameters, buffer aliases/slices, foreign mappings, and non-default allocator
+  options are not. Ordinary tensor padding lowers to guarded loads with fallback.
+- This is not a general tinygrad device: unsupported UOps raise
+  `NotImplementedError`; malformed runtime arguments raise `ValueError`.
+  Pure copies or optimized-away expressions need not reach the renderer, so a
+  successful copy alone is not evidence of dtype computation support. Discard
+  tensors involved in failed realization before retrying another computation.
+
+### Local dependency delivery
+
+`tinygrad/` is currently a separate local git checkout and the GSIM module is
+untracked inside it. Do **not** add that directory as an accidental gitlink or
+commit its nested repository. To reproduce locally, obtain the same approved
+checkout, verify `git -C tinygrad rev-parse HEAD`, and copy this backend module
+into its `tinygrad/runtime/` directory. The test runner inserts the checkout on
+`sys.path`; no global installation or pip mutation is needed.
+
+**Unresolved PR delivery choice:** decide whether to ship tinygrad as an explicit
+submodule plus a separately tracked backend overlay, vendor an approved source
+snapshot, or maintain a backend patch against an agreed dependency revision.
+The current working-tree integration is tested, but is not a self-contained fresh
+clone dependency delivery mechanism. No guessed remote or version was pinned.
