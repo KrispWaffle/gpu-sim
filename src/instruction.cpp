@@ -5,6 +5,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <stdexcept>
+#include <cmath>
+#include <limits>
 
 int getRegisterName(const std::string& reg)
 {
@@ -48,7 +50,11 @@ OpInfo decodeOperand(const Operand& op, ExecutionContext& ctx) {
         OpInfo idxInfo = decodeOperand(inner, ctx);
         if (idxInfo.kind == OpKind::Invalid)
             return { OpKind::Invalid, 0.0f, 0, {} };
-        int idx = (int)fetch(idxInfo, ctx);
+        float value = fetch(idxInfo, ctx);
+        if (!std::isfinite(value) || value < 0 ||
+            static_cast<double>(value) > std::numeric_limits<int>::max())
+            return { OpKind::Invalid, 0.0f, 0, {} };
+        int idx = static_cast<int>(value);
         size_t limit = pm->space == StoreLoc::GLOBAL ? ctx.globalMem.size()
                                                      : ctx.warp.memory.size();
         if (idx < 0 || (size_t)idx >= limit)

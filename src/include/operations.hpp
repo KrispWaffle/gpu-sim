@@ -4,8 +4,9 @@
 #include <array>
 
 using HandlerFn = ErrorCode(*)(ExecutionContext&, const Instr&);
-extern std::array<HandlerFn, 24> opcode_handlers;
+constexpr size_t OPCODE_COUNT = static_cast<size_t>(Opcode::BAR) + 1;
 
+const std::array<HandlerFn, OPCODE_COUNT>& opcodeHandlers();
 void setup_opcode_handlers();
 
 ErrorCode _binary_(ExecutionContext& ctx, const Instr& instr);
