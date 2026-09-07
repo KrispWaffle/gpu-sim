@@ -1,0 +1,36 @@
+; parallel tree reduction: gm[0] = sum of every thread's value
+; each thread contributes its tidx; with 32 threads: 0+1+...+31 = 496
+;
+; classic stride-halving pattern:
+;   stride = 16: gm[i] += gm[i+16]  (threads 0..15)
+;   stride =  8: gm[i] += gm[i+8]   (threads 0..7)
+;   ... down to stride 1, then gm[0] holds the total
+;
+; half the lanes drop out each round
+; (divergence), warps wait at the barrier (yellow), and global
+; accesses stall (blue)
+
+def local stride = 16 @ r1    ; numThreads / 2
+
+    st gm[tidx], tidx         ; everyone stores their value
+    bar
+
+loop:
+    cmp_lt tidx, stride       ; only the first `stride` threads work
+    jmp  work
+    jmpu sync                 ; idle lanes skip straight to the barrier
+
+work:
+    mov  r2, tidx
+    add  r2, r2, stride       ; partner index = tidx + stride
+    ld   r3, gm[r2]
+    ld   r4, gm[tidx]
+    add  r3, r3, r4
+    st   gm[tidx], r3
+
+sync:
+    bar
+    div  stride, stride, 2.0
+    cmp_lt 0.5, stride        ; loop while stride >= 1
+    jmp  loop
+    halt

@@ -4,9 +4,10 @@
 #include <variant>
 #include <optional>
 
-enum class Opcode { ADD, SUB, MUL, DIV, NEG, LD, ST, MOV, HALT, DEF, LABEL, JMP,CMP_LT, AND, OR, XOR };
+enum class Opcode { ADD, SUB, MUL, DIV, NEG, LD, ST, MOV, HALT, DEF, LABEL, JMP, CMP_LT, AND, OR, XOR,
+                    JMPU, CMP_EQ, CMP_GT, BAR };
 enum class StoreLoc { GLOBAL, SHARED, LOCAL };
-enum class ErrorCode { None, GlobalOutOfBounds, SharedOutOfBounds, InvalidMemorySpace, DivByZero, StringReq, VarNotFound};
+enum class ErrorCode { None, GlobalOutOfBounds, SharedOutOfBounds, InvalidMemorySpace, DivByZero, StringReq, VarNotFound, BadOperand};
 enum class OpKind { Constant, Register, Variable, Global, Shared, Invalid };
 
 struct Variable {
@@ -18,21 +19,28 @@ struct Variable {
     StoreLoc loc;
 };
 
-using Operand = std::variant<Opcode, std::string, float, Variable, StoreLoc, int>;
+struct MemRef {
+    StoreLoc space;
+    std::string idxTok;
+};
+
+using Operand = std::variant<Opcode, std::string, float, Variable, StoreLoc, int, MemRef>;
 
 struct Instr {
     Opcode op;
     std::vector<Operand> src;
+    int ln = 0;   
 };
 
 struct OpInfo {
     OpKind kind;
     float constVal;
-    int index;
+    size_t index;
     Variable var;
 };
 
-// parsing helpers
-int getRegisterName(std::string reg);
-int getMemoryLocation(std::string mem);
-OpInfo decodeOperand(const Operand &op, class Thread &t);
+struct ExecutionContext;
+
+int getRegisterName(const std::string& reg);
+int getMemoryLocation(const std::string& mem);
+OpInfo decodeOperand(const Operand& op, ExecutionContext& ctx);

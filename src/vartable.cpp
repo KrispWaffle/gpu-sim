@@ -1,17 +1,19 @@
 #include "vartable.hpp"
-#include <string>
 
-VarTable& VarTable::getInstance() {
-    static VarTable instance;
-    return instance;
+void VarTable::addVar(const Variable& var) {
+    table[var.name] = var;
 }
 
-void VarTable::addVar(const Variable& var, int thread_id) {
-    table[var.name + "_" + std::to_string(thread_id)] = var;
-}
-
-std::optional<Variable> VarTable::getVar(const std::string& name, int thread_id) {
-    auto it = table.find(name + "_" + std::to_string(thread_id));
+std::optional<Variable> VarTable::getVar(const std::string& name) const {
+    auto it = table.find(name);
     if (it != table.end()) return it->second;
     return std::nullopt;
+}
+
+bool VarTable::has(const std::string& name) const {
+    return table.find(name) != table.end();
+}
+
+void VarTable::clear() {
+    table.clear();
 }

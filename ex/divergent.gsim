@@ -1,0 +1,26 @@
+; Divergent if/else: tests SIMT divergence.
+; Even-id threads take one path, odd-id threads take another.
+; Both branches do real work, so the warp must serialize them.
+;
+; Expected register state at halt:
+;   even threads: r0 = tidx * 2
+;   odd  threads: r0 = tidx + 100
+;
+; Watch the Timeline window: each warp splits into two colored bands
+; (the two splinters) and re-merges at `end:`.
+
+    and    r2, tidx, 1.0      ; r2 = tidx & 1   (0=even, 1=odd)
+    cmp_lt r2, 0.5            ; predicate = is_even
+    jmp    even               ; even threads jump; odd threads fall through
+
+    ; --- odd path: r0 = tidx + 100 ---
+    mov    r0, tidx
+    add    r0, r0, 100.0
+    jmpu   end
+
+even:
+    mov    r0, tidx
+    mul    r0, r0, 2.0
+
+end:
+    halt

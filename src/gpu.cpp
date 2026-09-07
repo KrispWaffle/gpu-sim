@@ -1,110 +1,343 @@
 #include "gpu.hpp"
 #include "operations.hpp"
+#include "execution.hpp"
 #include <iostream>
 #include <algorithm>
-#include "vartable.hpp"
-int Thread::_id = 0;
+static const char *errorName(ErrorCode e)
+{
+    switch (e)
+    {
+    case ErrorCode::None:
+        return "None";
+    case ErrorCode::GlobalOutOfBounds:
+        return "GlobalOutOfBounds";
+    case ErrorCode::SharedOutOfBounds:
+        return "SharedOutOfBounds";
+    case ErrorCode::InvalidMemorySpace:
+        return "InvalidMemorySpace";
+    case ErrorCode::DivByZero:
+        return "DivByZero";
+    case ErrorCode::StringReq:
+        return "StringReq";
+    case ErrorCode::VarNotFound:
+        return "VarNotFound";
+    case ErrorCode::BadOperand:
+        return "BadOperand";
+    }
+    return "?";
+}
 
-Thread::Thread() : id_(_id++), pc(0), _registers(NUM_REGISTERS, 0.0f), active(true), predicateReg(0) {}
-void Thread::printRegisters() const {
+Thread::Thread(int id, int numRegisters) : id_(id), active(true), _registers(numRegisters, 0.0f), predicateReg(0) {}
+void Thread::printRegisters() const
+{
     std::cout << "\nTHREAD: " << id_ << "\n";
-    for (size_t x = 0; x < _registers.size(); x++) {
+    for (size_t x = 0; x < _registers.size(); x++)
+    {
         std::cout << "REG: " << x << " VALUE: " << _registers[x] << "\n";
     }
 }
-void Thread::set_instruction(Instr instr) {
+void Thread::set_instruction(Instr instr)
+{
     instruction = std::move(instr);
 }
 
-Warp::Warp() : id_(0), memory(GLOBAL_MEM_SIZE, 0.0f) {
-    static int next_id = 0;
-    id_ = next_id++;
+Warp::Warp(int id, int warpSize) : id_(id), memory(warpSize, 0.0f) {}
+
+bool Warp::isFinished() const
+{
+    return splinters.empty();
 }
 
-bool Warp::isFinished() const {
-    for (const auto& t : threads) {
-        if (t->active) return false;
-    }
-    return true;
-}
-
-void Warp::addThread(std::shared_ptr<Thread> thread) {
+void Warp::addThread(std::shared_ptr<Thread> thread)
+{
+    if (splinters.empty())
+        splinters.push_back({0, std::bitset<MAX_WARP_SIZE>()});
+    splinters[0].mask.set(threads.size());
     threads.push_back(thread);
 }
 
-void Warp::print_sharedMem() const {
-    for (const auto& i : memory) {
+void Warp::print_sharedMem() const
+{
+    for (const auto &i : memory)
+    {
         std::cout << i << ", ";
     }
     std::cout << "\n";
 }
 
-SM::SM(int sm_id, std::vector<float>& memory) : id(sm_id), globalMemory(memory), shared_pc(0) {}
+SM::SM(int sm_id, std::vector<float> &memory, VarTable &v, LabelTable &l)
+    : id(sm_id), globalMemory(memory), vars(v), labels(l) {}
 
-void SM::addWarp(const Warp& warp) {
+void SM::addWarp(const Warp &warp)
+{
     warps.push_back(warp);
 }
 
-void SM::cycle(const std::vector<Instr>& program) {
-    for (auto& warp : warps) {
-        if (warp.isFinished()) continue;
-
-        shared_pc = 0;
-        for (const auto& t : warp.threads) {
-            if (t->active) {
-                shared_pc = t->pc;
-                break;
-            }
+void SM::cycle(const std::vector<Instr> &program)
+{
+    for (auto &warp : warps)
+    {
+        if (warp.isFinished() || warp.atBarrier)
+            continue;
+        if (warp.stallCycles > 0)
+        {
+            warp.stallCycles--;
+            if (stats) stats->stallCycles++;
+            continue;
         }
-
-        const Instr& instruction = program[shared_pc];
-
-        execute(warp, instruction);
+        execute(warp, program);
     }
 }
 
-void SM::execute(Warp& warp, const Instr& instruction) {
-    HandlerFn fn = opcode_handlers[static_cast<int>(instruction.op)];
+// does this instruction read or write global memory?
+static bool touchesGlobal(const Instr &instr, const VarTable &vars)
+{
+    if (instr.op == Opcode::DEF) return false;
+    for (const auto &op : instr.src)
+    {
+        if (auto pm = std::get_if<MemRef>(&op))
+        {
+            if (pm->space == StoreLoc::GLOBAL) return true;
+        }
+        else if (auto ps = std::get_if<std::string>(&op))
+        {
+            if (ps->size() > 2 && ps->compare(0, 2, "gm") == 0) return true;
+            if (auto ov = vars.getVar(*ps); ov && ov->loc == StoreLoc::GLOBAL) return true;
+        }
+    }
+    return false;
+}
+/*
+
+void SM::execute(Warp& warp, const std::vector<Instr>& program) {
     for (auto& thread : warp.threads) {
         if (!thread->active) continue;
-        fn(*thread, warp, globalMemory, instruction);
-        if (thread->active) thread->pc++;
-    }
-}
-
-GPU::GPU(const std::vector<Instr>& program) : program(program), global_memory(GLOBAL_MEM_SIZE, 0.0f), cycle_count(0) {
-    sms.emplace_back(0, global_memory);
-    for (int i = 0; i < NUM_THREADS; i++) {
-        Thread t;
-        all_threads.push_back(std::make_shared<Thread>(t));
-    }
-    for (int i = 0; i < NUM_THREADS; i += WARP_SIZE) {
-        Warp new_warp;
-        for (int j = 0; j < WARP_SIZE && (i + j) < NUM_THREADS; j++) {
-            new_warp.addThread(all_threads[i + j]);
+        if (thread->pc >= program.size()) {
+            thread->active = false;
+            continue;
         }
-        sms[0].addWarp(new_warp);
+        const Instr& instruction = program[thread->pc];
+        HandlerFn fn = opcode_handlers[static_cast<int>(instruction.op)];
+        ExecutionContext ctx{*thread, warp, globalMemory, vars, labels};
+        ErrorCode err = fn(ctx, instruction);
+        if (err != ErrorCode::None) {
+            std::cout << "\n[T" << thread->id() << "] ERROR: " << errorName(err)
+                      << " — halting thread\n";
+            thread->active = false;
+        }
+        if (thread->active) thread->pc++;
+        shared_pc = thread->pc;
     }
 }
+*/
+static void mergeSplinters(Warp &warp)
+{
+    for (size_t i = 0; i < warp.splinters.size(); ++i)
+    {
+        for (size_t j = i + 1; j < warp.splinters.size();)
+        {
+            if (warp.splinters[j].pc == warp.splinters[i].pc)
+            {
+                warp.splinters[i].mask |= warp.splinters[j].mask;
+                warp.splinters.erase(warp.splinters.begin() + j);
+            }
+            else
+            {
+                ++j;
+            }
+        }
+    }
+}
+void SM::execute(Warp &warp, const std::vector<Instr> &program)
+{
+    if (warp.splinters.empty())
+    {
+        return;
+    }
+    auto it = std::min_element(warp.splinters.begin(), warp.splinters.end(), [](const Splinter &a, const Splinter &b)
+                               { return a.pc < b.pc; });
+    Splinter &S = *it;
+    if (S.pc >= program.size())
+    {
+        warp.splinters.erase(it);
+        return;
+    }
+    const Instr &instr = program[S.pc];
+    if (stats)
+    {
+        stats->instructionsIssued += (long long)S.mask.count();
+        stats->issueSlots += (long long)warp.threads.size();
+    }
+    if (instr.op != Opcode::JMP && instr.op != Opcode::JMPU && instr.op != Opcode::BAR)
+    {
+        for (size_t t = 0; t < warp.threads.size(); ++t)
+        {
+            if (!S.mask.test(t))
+                continue;
+            Thread &th = *warp.threads[t];
+            ExecutionContext ctx{th, warp, globalMemory, vars, labels};
+            ErrorCode err = opcode_handlers[(int)instr.op](ctx, instr);
+            if (err != ErrorCode::None)
+            {
+                std::cout << "[T" << th.id() << "] ERROR: " << errorName(err) << "\n";
+                S.mask.reset(t);
+            }
+        }
+        if (globalLatency > 1 && touchesGlobal(instr, vars))
+            warp.stallCycles = globalLatency - 1;  
+    }
+    if (instr.op == Opcode::HALT)
+    {
+        warp.splinters.erase(it);
+        return;
+    }
+    else if (instr.op == Opcode::BAR)
+    {
+        if (warp.splinters.size() > 1)
+            std::cout << "[W" << warp.id_ << "] WARNING: divergent barrier — "
+                      << "some lanes already passed it\n";
+        warp.atBarrier = true; 
+        return;
+    }
+    else if (instr.op == Opcode::JMP || instr.op == Opcode::JMPU)
+    {
+        const std::string *name = std::get_if<std::string>(&instr.src[0]);
+        auto target = labels.getLabel(*name);
+        if (!target)
+        {
+            S.pc++;
+            return;
+        }
+        size_t jump_pc = static_cast<size_t>(*target);
+        size_t next_pc = S.pc + 1;
 
-GPU::~GPU() {
-    stop(); 
+        if (instr.op == Opcode::JMPU)
+        {
+            S.pc = jump_pc;
+            mergeSplinters(warp);
+            return;
+        }
+
+        std::bitset<MAX_WARP_SIZE> takers, fallers;
+        for (size_t t = 0; t < warp.threads.size(); ++t)
+        {
+            if (!S.mask.test(t))
+                continue;
+            if (warp.threads[t]->predicateReg)
+                takers.set(t);
+            else
+                fallers.set(t);
+        }
+
+        if (takers.none())
+        {
+            S.pc = next_pc;
+        }
+        else if (fallers.none())
+        {
+            S.pc = jump_pc;
+        } 
+        else
+        {
+            if (stats) stats->divergenceEvents++;
+            S.pc = next_pc;
+            S.mask = fallers;
+            warp.splinters.push_back({jump_pc, takers});
+        }
+    }
+    else
+    {
+        S.pc++;
+    }
+
+    mergeSplinters(warp);
+}
+GPU::GPU(const std::vector<Instr> &program) : program(program), cycle_count(0)
+{
+    configure(SimConfig{});
 }
 
-void GPU::run()
+void GPU::configure(const SimConfig &config)
 {
     stop();
+    std::lock_guard<std::mutex> lock(mtx);
+
+    cfg = config;
+    cfg.numThreads    = std::max(1, cfg.numThreads);
+    cfg.warpSize      = std::clamp(cfg.warpSize, 1, MAX_WARP_SIZE);
+    cfg.numSMs        = std::max(1, cfg.numSMs);
+    cfg.numRegisters  = std::max(1, cfg.numRegisters);
+    cfg.globalMemSize = std::max(1, cfg.globalMemSize);
+    cfg.globalLatency = std::max(0, cfg.globalLatency);
+
+    all_threads.clear();
+    sms.clear();
+    global_memory.assign(cfg.globalMemSize, 0.0f);
+
+    for (int i = 0; i < cfg.numThreads; i++)
+        all_threads.push_back(std::make_shared<Thread>(i, cfg.numRegisters));
+
+    for (int s = 0; s < cfg.numSMs; s++)
+    {
+        sms.emplace_back(s, global_memory, vars, labels);
+        sms.back().stats = &stats;
+        sms.back().globalLatency = cfg.globalLatency;
+    }
+
+    int numWarps = (cfg.numThreads + cfg.warpSize - 1) / cfg.warpSize;
+    for (int w = 0; w < numWarps; w++)
+    {
+        Warp new_warp(w, cfg.warpSize);
+        for (int j = 0; j < cfg.warpSize && (w * cfg.warpSize + j) < cfg.numThreads; j++)
+        {
+            new_warp.addThread(all_threads[w * cfg.warpSize + j]);
+        }
+        sms[w % cfg.numSMs].addWarp(new_warp);
+    }
+
+    resetLocked();
+}
+
+std::tuple<int, int, int> GPU::locateThread(int tid) const
+{
+    int w = tid / cfg.warpSize;
+    return {w % cfg.numSMs, w / cfg.numSMs, tid % cfg.warpSize};
+}
+
+GPU::~GPU()
+{
+    stop();
+}
+
+void GPU::run(bool startPaused)
+{
+    reset();
     running = true;
     finished = false;
+    paused = startPaused;
 
-    worker = std::thread([this]() {
+    worker = std::thread([this]()
+                         {
         std::cout << "--- Simulation Starting ---"<< std::endl;
-        bool all_sms_finished = false; 
+        bool all_sms_finished = false;
 
         while (running && !all_sms_finished) {
+            if (paused && pendingSteps.load() == 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
+            bool stepping = pendingSteps.load() > 0;
             all_sms_finished = true;
             {
                 std::lock_guard<std::mutex> lock(mtx);
+                if (history.size() < HISTORY_CAP) {
+                    int numWarps = (cfg.numThreads + cfg.warpSize - 1) / cfg.warpSize;
+                    std::vector<WarpCycleRecord> rec(numWarps);
+                    for (auto& sm : sms)
+                        for (auto& warp : sm.warps)
+                            rec[warp.id_] = {warp.splinters, warp.stallCycles > 0, warp.atBarrier};
+                    history.push_back(std::move(rec));
+                }
                 for (auto& sm : sms) {
                     sm.cycle(program);
                     for (const auto& warp : sm.warps) {
@@ -113,54 +346,88 @@ void GPU::run()
                         }
                     }
                 }
-                for(auto& var:VarTable::getInstance().table){
+                // device-wide barrier: release once every unfinished warp has arrived
+                {
+                    bool anyAtBar = false, allAtBar = true;
+                    for (auto& sm : sms)
+                        for (auto& warp : sm.warps) {
+                            if (warp.isFinished()) continue;
+                            if (warp.atBarrier) anyAtBar = true;
+                            else allAtBar = false;
+                        }
+                    if (anyAtBar && allAtBar) {
+                        for (auto& sm : sms)
+                            for (auto& warp : sm.warps) {
+                                if (warp.isFinished() || !warp.atBarrier) continue;
+                                warp.atBarrier = false;
+                                auto it = std::min_element(
+                                    warp.splinters.begin(), warp.splinters.end(),
+                                    [](const Splinter& a, const Splinter& b)
+                                    { return a.pc < b.pc; });
+                                it->pc++;
+                                mergeSplinters(warp);
+                            }
+                    }
+                }
+                for(auto& var : vars.table){
+                    int off = var.second.threadIDX ? 0 : var.second.offset;
                     switch (var.second.loc)
                     {
                     case StoreLoc::GLOBAL:
-                        var.second.value = global_memory[var.second.offset];
+                        if (off >= 0 && off < (int)global_memory.size())
+                            var.second.value = global_memory[off];
                         break;
                     case StoreLoc::LOCAL:
-                        var.second.value = this->all_threads[0]->_registers[var.second.offset];
+                        if (!all_threads.empty() && off >= 0 && off < (int)all_threads[0]->_registers.size())
+                            var.second.value = all_threads[0]->_registers[off];
                         break;
                     case StoreLoc::SHARED:
-                        //temp solution
-                        var.second.value = this->sms[0].warps[0].memory[var.second.offset];
+                        if (!sms.empty() && !sms[0].warps.empty() &&
+                            off >= 0 && off < (int)sms[0].warps[0].memory.size())
+                            var.second.value = sms[0].warps[0].memory[off];
                         break;
                     default:
                         break;
                     }
                 }
             cycle_count++;
-            std::cout.flush(); 
-                
+            std::cout.flush();
+
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_TIME)); 
+            if (stepping)
+                pendingSteps--;
+            else
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs.load()));
         }
 
         finished = true;
-        std::cout << "\n--- Simulation Finished in " << cycle_count << " cycles ---"<< std::endl;
-    });
-
+        std::cout << "\n--- Simulation Finished in " << cycle_count << " cycles ---"<< std::endl; });
 }
 
 void GPU::stop()
 {
     running = false;
-    if (worker.joinable()) worker.join();
+    if (worker.joinable())
+        worker.join();
 }
 
-void GPU::print_shared_mem() const {
+void GPU::print_shared_mem() const
+{
     std::cout << "\n";
-    for (const auto& sm : sms) {
-        for (const auto& warp : sm.warps) {
+    for (const auto &sm : sms)
+    {
+        for (const auto &warp : sm.warps)
+        {
             warp.print_sharedMem();
         }
     }
     std::cout << "\n";
 }
 
-void GPU::print_global_mem() const {
-    for (const auto& m : global_memory) {
+void GPU::print_global_mem() const
+{
+    for (const auto &m : global_memory)
+    {
         std::cout << m << ", ";
     }
     std::cout << "\n";
@@ -170,27 +437,51 @@ int GPU::get_cycle() const
     return cycle_count;
 }
 
-void GPU::reset() {
+void GPU::reset()
+{
     stop();
-    finished = false;
-        std::lock_guard<std::mutex> lock(mtx);
+    std::lock_guard<std::mutex> lock(mtx);
+    resetLocked();
+}
 
+void GPU::resetLocked()
+{
+    finished = false;
     cycle_count = 0;
-    for(auto& sms: this->sms){
-        sms.shared_pc = 0;
-    }
-    for (auto& t : all_threads) {
-        t->pc = 0;
+    stats = SimStats{};
+    history.clear();
+    pendingSteps = 0;
+    for (auto &t : all_threads)
+    {
         t->active = true;
         std::fill(t->_registers.begin(), t->_registers.end(), 0.0f);
     }
     std::fill(global_memory.begin(), global_memory.end(), 0.0f);
-    for (auto& sm : sms) {
-        for (auto& warp : sm.warps) {
+    for (auto &sm : sms)
+    {
+        for (auto &warp : sm.warps)
+        {
             std::fill(warp.memory.begin(), warp.memory.end(), 0.0f);
+            warp.atBarrier = false;
+            warp.stallCycles = 0;
+            warp.splinters.clear();
+            std::bitset<MAX_WARP_SIZE> mask;
+            for (size_t t = 0; t < warp.threads.size(); ++t)
+                mask.set(t);
+            warp.splinters.push_back({0, mask});
         }
     }
-    
-    VarTable::getInstance().table.clear();
 
+    vars.clear();
+    labels.clear();
+    for (auto &kv : initial_labels)
+        labels.addLabel(kv.first, kv.second);
+}
+
+void GPU::loadProgram(std::vector<Instr> instrs, std::unordered_map<std::string, int> labels_map)
+{
+    stop();
+    std::lock_guard<std::mutex> lock(mtx);
+    program = std::move(instrs);
+    initial_labels = std::move(labels_map);
 }

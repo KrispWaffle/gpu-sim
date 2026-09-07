@@ -1,0 +1,6 @@
+; bitwise OR demo
+def shared p = 7 tidx
+def global i = 4 tidx
+
+or   r1, p, i
+halt

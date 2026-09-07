@@ -1,0 +1,7 @@
+def global x = 9 tidx
+
+loop:
+    add x, x, 9 
+    cmp_lt x 81
+    jmp loop
+    halt

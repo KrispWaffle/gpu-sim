@@ -1,12 +1,17 @@
 #ifndef CONFIG_HPP
 #define CONFIG_HPP
-constexpr int NUM_THREADS = 10;
-constexpr int NUM_REGISTERS = 4;
-constexpr int GLOBAL_MEM_SIZE = NUM_THREADS;
-constexpr int WARP_SIZE = NUM_THREADS;
-constexpr int SLEEP_TIME =1; // In seconds 
-constexpr size_t NUM_OPCODES = 13; 
-constexpr int NUM_VAR_LOCS=3;
+#include <cstddef>
+
+constexpr int MAX_WARP_SIZE = 64;
 constexpr int TIDX_RETURN_VAL = -1;
-constexpr int DELAY_TIME = 50;  
-#endif 
+constexpr int DELAY_TIME = 50;
+
+struct SimConfig {
+    int numThreads    = 32;
+    int warpSize      = 8;
+    int numSMs        = 2;
+    int numRegisters  = 8;
+    int globalMemSize = 128;
+    int globalLatency = 4;  
+};
+#endif

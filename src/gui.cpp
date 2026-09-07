@@ -25,6 +25,7 @@ GUI::GUI()
     ImGui::CreateContext();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGuiIO &io = ImGui::GetIO();
+    io.Fonts->AddFontFromFileTTF("src/extra/tahomabd.ttf", 12.0f);
     (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
